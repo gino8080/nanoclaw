@@ -42,3 +42,8 @@ groups/telegram_swarm/*
 .nanoclaw/
 
 agents-sdk-docs
+
+# TLS certs (Tailscale Funnel)
+*.crt
+*.key
+*.pem

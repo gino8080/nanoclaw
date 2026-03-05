@@ -21,6 +21,8 @@
  */
 
 import { createServer, IncomingMessage, ServerResponse } from 'http';
+import fs from 'fs';
+import path from 'path';
 
 import { ContainerOutput } from './container-runner.js';
 import { logger } from './logger.js';
@@ -33,6 +35,65 @@ const MAX_BODY_BYTES = 16_000;
 const API_TOKEN = process.env.HTTP_API_TOKEN ?? '';
 /** Max seconds to wait for the agent to respond before giving up. */
 const RESPONSE_TIMEOUT_MS = 120_000;
+
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.webp': 'image/webp',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain; charset=utf-8',
+};
+
+const STATIC_ROOT =
+  process.env.STATIC_FILES_DIR ??
+  '/Users/magico/PROJECTS/PERSONAL/NANO_CLAW_DATA';
+
+/**
+ * Serve a static file from NANO_CLAW_DATA.
+ * URL format: /files/subdir/filename.ext
+ * Returns true if handled (even for errors), false if URL doesn't match.
+ */
+function serveStaticFile(res: ServerResponse, urlPath: string): boolean {
+  // /files/ prefix already stripped by caller — urlPath is the rest
+  const filePath = urlPath.replace(/^\/files\//, '');
+  if (!filePath) return false;
+
+  const resolved = path.resolve(STATIC_ROOT, filePath);
+
+  // Path traversal protection
+  const relative = path.relative(STATIC_ROOT, resolved);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    json(res, 403, { error: 'Forbidden' });
+    return true;
+  }
+
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+    json(res, 404, { error: 'File not found' });
+    return true;
+  }
+
+  const ext = path.extname(resolved).toLowerCase();
+  const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+
+  const content = fs.readFileSync(resolved);
+  res.writeHead(200, {
+    'Content-Type': contentType,
+    'Content-Length': content.length,
+    'Access-Control-Allow-Origin': '*',
+    'Content-Security-Policy':
+      "default-src 'self' 'unsafe-inline' https: data:; script-src 'self' 'unsafe-inline' https://maps.googleapis.com https://maps.gstatic.com https://unpkg.com https://cdn.jsdelivr.net; frame-src https://www.google.com https://maps.google.com",
+  });
+  res.end(content);
+  return true;
+}
 
 export interface HttpApiDeps {
   getRegisteredGroups: () => Record<string, RegisteredGroup>;
@@ -100,6 +161,14 @@ export function startHttpApi(deps: HttpApiDeps): void {
       // Health check
       if (req.method === 'GET' && req.url === '/health') {
         json(res, 200, { ok: true, busy: activeRequest });
+        return;
+      }
+
+      // Static file serving: GET /files/subdir/filename.ext
+      if (req.method === 'GET' && req.url?.startsWith('/files/')) {
+        const urlPath = decodeURIComponent(req.url.split('?')[0]);
+        if (serveStaticFile(res, urlPath)) return;
+        json(res, 404, { error: 'File not found' });
         return;
       }
 

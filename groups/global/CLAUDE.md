@@ -47,6 +47,28 @@ When you learn something important:
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
+## Sharing content via web link
+
+All files saved in `NANO_CLAW_DATA/` are accessible via web at `$PUBLIC_BASE_URL/files/{path}` (read `$PUBLIC_BASE_URL` from environment). The URL path mirrors the filesystem path inside NANO_CLAW_DATA.
+
+*Prefer sharing a link* over pasting long content in chat. Use links for:
+- HTML pages (itineraries, dashboards, reports with formatting/maps/charts)
+- Markdown reports and research documents
+- Generated images
+- PDFs or any other file
+
+How to:
+1. Save the file to the appropriate subfolder in `/workspace/extra/NANO_CLAW_DATA/` (e.g. `pages/`, `report_giornalieri/`, `ricerche/`, `images/`)
+2. Use a descriptive filename with a random suffix to avoid collisions, e.g. `itinerario-roma-a3f8.html`
+3. Share the link: `$PUBLIC_BASE_URL/files/{subfolder}/{filename}`
+4. Add a short summary in chat alongside the link
+
+When the content benefits from rich formatting (maps, charts, interactive elements), generate an HTML page:
+- Self-contained (inline CSS/JS, or CDN links like Leaflet.js, Chart.js)
+- For maps use Leaflet.js + OpenStreetMap tiles (free, no API key)
+- Responsive design for mobile
+- Include external links (Google Maps directions, booking sites, etc.)
+
 ## Message Formatting
 
 NEVER use markdown. Only use WhatsApp/Telegram formatting:

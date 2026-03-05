@@ -80,3 +80,6 @@ export const TRIGGER_PATTERN = new RegExp(
 // Uses system timezone by default
 export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+export const PUBLIC_BASE_URL =
+  process.env.PUBLIC_BASE_URL ?? 'https://mini4.tailef26dc.ts.net';
