@@ -196,11 +196,21 @@ Send the image to the user via send_message with a link or description.`,
       const outPath = path.join(outDir, outName);
       fs.writeFileSync(outPath, Buffer.from(result.image_base64, 'base64'));
 
+      // Send the image directly to the chat via IPC
+      writeIpcFile(MESSAGES_DIR, {
+        type: 'send_image',
+        chatJid,
+        image_base64: result.image_base64,
+        caption: result.text || undefined,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+
       return {
         content: [
           {
             type: 'text' as const,
-            text: `Image saved to ${outPath} (${Math.round(result.image_base64.length * 0.75 / 1024)}KB). ${result.text || ''}`.trim(),
+            text: `Image generated and sent to chat. Also saved to ${outPath} (${Math.round(result.image_base64.length * 0.75 / 1024)}KB).`,
           },
         ],
       };

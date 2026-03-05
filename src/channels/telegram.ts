@@ -1,4 +1,4 @@
-import { Api, Bot } from 'grammy';
+import { Api, Bot, InputFile } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
@@ -246,6 +246,28 @@ export class TelegramChannel implements Channel {
     }
   }
 
+  async sendPhoto(
+    jid: string,
+    photoBuffer: Buffer,
+    caption?: string,
+  ): Promise<void> {
+    if (!this.bot) {
+      logger.warn('Telegram bot not initialized');
+      return;
+    }
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      await this.bot.api.sendPhoto(
+        numericId,
+        new InputFile(photoBuffer, 'image.png'),
+        caption ? { caption } : undefined,
+      );
+      logger.info({ jid }, 'Telegram photo sent');
+    } catch (err) {
+      logger.error({ jid, err }, 'Failed to send Telegram photo');
+    }
+  }
+
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     if (!this.bot || !isTyping) return;
     try {
@@ -338,6 +360,46 @@ export async function sendPoolMessage(
     );
   } catch (err) {
     logger.error({ chatId, sender, err }, 'Failed to send pool message');
+  }
+}
+
+/**
+ * Send a photo via a pool bot assigned to the given sender name.
+ */
+export async function sendPoolPhoto(
+  chatId: string,
+  photoBuffer: Buffer,
+  sender: string,
+  groupFolder: string,
+  caption?: string,
+): Promise<void> {
+  if (poolApis.length === 0) return;
+
+  const key = `${groupFolder}:${sender}`;
+  let idx = senderBotMap.get(key);
+  if (idx === undefined) {
+    idx = nextPoolIndex % poolApis.length;
+    nextPoolIndex++;
+    senderBotMap.set(key, idx);
+    try {
+      await poolApis[idx].setMyName(sender);
+      await new Promise((r) => setTimeout(r, 2000));
+    } catch {
+      // ignore rename failure
+    }
+  }
+
+  const api = poolApis[idx];
+  try {
+    const numericId = chatId.replace(/^tg:/, '');
+    await api.sendPhoto(
+      numericId,
+      new InputFile(photoBuffer, 'image.png'),
+      caption ? { caption } : undefined,
+    );
+    logger.info({ chatId, sender, poolIndex: idx }, 'Pool photo sent');
+  } catch (err) {
+    logger.error({ chatId, sender, err }, 'Failed to send pool photo');
   }
 }
 

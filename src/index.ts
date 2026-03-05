@@ -186,6 +186,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     'Processing messages',
   );
 
+  // Send typing indicator and quick ack
+  // Send typing indicator and quick ack
+  await channel.setTyping?.(chatJid, true);
+  await channel.sendMessage(chatJid, `_Ricevuto, ci penso..._`).catch(() => {});
+
+  // Keep typing indicator alive (Telegram resets it after ~5s)
+  const typingInterval = setInterval(() => {
+    channel.setTyping?.(chatJid, true)?.catch(() => {});
+  }, 4000);
+
   // Track idle timer for closing stdin when agent is idle
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -200,7 +210,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
 
@@ -231,6 +240,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   });
 
+  clearInterval(typingInterval);
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
 
@@ -557,6 +567,13 @@ async function main(): Promise<void> {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text);
+    },
+    sendPhoto: (jid, photo, caption) => {
+      const channel = findChannel(channels, jid);
+      if (!channel || !channel.sendPhoto) {
+        throw new Error(`No photo-capable channel for JID: ${jid}`);
+      }
+      return channel.sendPhoto(jid, photo, caption);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,

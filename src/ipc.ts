@@ -4,7 +4,7 @@ import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
-import { sendPoolMessage } from './channels/telegram.js';
+import { sendPoolMessage, sendPoolPhoto } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
@@ -13,6 +13,7 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendPhoto: (jid: string, photo: Buffer, caption?: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -106,6 +107,47 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
+                  );
+                }
+              } else if (
+                data.type === 'send_image' &&
+                data.chatJid &&
+                data.image_base64
+              ) {
+                const targetGroup = registeredGroups[data.chatJid];
+                if (
+                  isMain ||
+                  (targetGroup && targetGroup.folder === sourceGroup)
+                ) {
+                  const photoBuffer = Buffer.from(data.image_base64, 'base64');
+                  if (data.sender && data.chatJid.startsWith('tg:')) {
+                    await sendPoolPhoto(
+                      data.chatJid,
+                      photoBuffer,
+                      data.sender,
+                      sourceGroup,
+                      data.caption,
+                    );
+                  } else if (data.chatJid.startsWith('tg:')) {
+                    await deps.sendPhoto(
+                      data.chatJid,
+                      photoBuffer,
+                      data.caption,
+                    );
+                  }
+                  logger.info(
+                    {
+                      chatJid: data.chatJid,
+                      sourceGroup,
+                      sender: data.sender || undefined,
+                      size: photoBuffer.length,
+                    },
+                    'IPC image sent',
+                  );
+                } else {
+                  logger.warn(
+                    { chatJid: data.chatJid, sourceGroup },
+                    'Unauthorized IPC image attempt blocked',
                   );
                 }
               }
