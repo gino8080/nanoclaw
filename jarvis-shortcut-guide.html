@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jarvis su Siri — Guida Shortcut</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+      background: #f2f2f7;
+      color: #1c1c1e;
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    header {
+      text-align: center;
+      padding: 36px 0 28px;
+    }
+    header .icon { font-size: 60px; display: block; margin-bottom: 12px; }
+    header h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
+    header p { color: #636366; margin-top: 8px; font-size: 14px; line-height: 1.5; }
+
+    /* ALERT BOX */
+    .alert {
+      border-radius: 14px;
+      padding: 18px 20px;
+      margin-bottom: 20px;
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+    }
+    .alert.red { background: #fff1f0; border: 1.5px solid #ffccc7; }
+    .alert.green { background: #f0fff4; border: 1.5px solid #b7eb8f; }
+    .alert.blue { background: #e8f4ff; border: 1.5px solid #91caff; }
+    .alert-icon { font-size: 24px; flex-shrink: 0; }
+    .alert-body h3 { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+    .alert-body p { font-size: 13px; color: #3a3a3c; line-height: 1.6; }
+    .alert-body code {
+      background: rgba(0,0,0,0.07);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: 'SF Mono', Menlo, monospace;
+      font-size: 12px;
+    }
+
+    /* SECTION HEADER */
+    .section-label {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #636366;
+      margin: 28px 0 12px;
+      padding-left: 4px;
+    }
+
+    /* CARDS */
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 14px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .card h2 {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 14px;
+    }
+
+    /* STEPS */
+    .step {
+      display: flex;
+      gap: 14px;
+      margin-bottom: 22px;
+      align-items: flex-start;
+    }
+    .step:last-child { margin-bottom: 0; }
+    .step-num {
+      min-width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: #007aff;
+      color: white;
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .step-num.orange { background: #ff9500; }
+    .step-num.purple { background: #af52de; }
+    .step-content h3 { font-size: 14px; font-weight: 600; margin-bottom: 5px; }
+    .step-content p { font-size: 13px; color: #3a3a3c; line-height: 1.6; }
+    .step-content ul { font-size: 13px; color: #3a3a3c; line-height: 1.8; padding-left: 18px; margin-top: 4px; }
+
+    /* ACTION ROWS (shortcut visual) */
+    .shortcut-flow {
+      background: #f9f9fb;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid #e5e5ea;
+    }
+    .sc-action {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid #e5e5ea;
+    }
+    .sc-action:last-child { border-bottom: none; }
+    .sc-icon {
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+    .sc-icon.blue { background: #007aff22; }
+    .sc-icon.orange { background: #ff950022; }
+    .sc-icon.green { background: #34c75922; }
+    .sc-icon.purple { background: #af52de22; }
+    .sc-icon.gray { background: #8e8e9322; }
+    .sc-text { flex: 1; }
+    .sc-name { font-size: 13px; font-weight: 600; }
+    .sc-desc { font-size: 12px; color: #636366; margin-top: 2px; line-height: 1.4; }
+    .sc-badge {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 20px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .sc-badge.blue { background: #007aff; color: white; }
+    .sc-badge.orange { background: #ff9500; color: white; }
+    .sc-badge.green { background: #34c759; color: white; }
+    .sc-badge.purple { background: #af52de; color: white; }
+    .sc-badge.gray { background: #636366; color: white; }
+
+    .sc-arrow {
+      text-align: center;
+      color: #c7c7cc;
+      font-size: 18px;
+      padding: 4px 0;
+    }
+
+    /* CODE */
+    .code-block {
+      background: #1c1c1e;
+      color: #e5e5ea;
+      border-radius: 10px;
+      padding: 14px 16px;
+      font-family: 'SF Mono', Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.8;
+      overflow-x: auto;
+      margin-top: 10px;
+    }
+    .code-block .c { color: #636366; }
+    .code-block .k { color: #79c0ff; }
+    .code-block .s { color: #f97583; }
+    .code-block .v { color: #a8ff78; }
+    .code-block .u { color: #ffcb6b; word-break: break-all; }
+    .code-block .h { color: #ff9500; }
+
+    /* TIP */
+    .tip {
+      background: #fff8ec;
+      border-left: 3px solid #ff9500;
+      border-radius: 0 10px 10px 0;
+      padding: 11px 14px;
+      font-size: 13px;
+      color: #3a3a3c;
+      line-height: 1.5;
+      margin-top: 12px;
+    }
+    .tip strong { color: #c96a00; }
+
+    /* COMPARISON */
+    .comparison {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .option-card {
+      border-radius: 14px;
+      padding: 16px;
+      border: 2px solid transparent;
+    }
+    .option-card.best { border-color: #007aff; background: #f0f7ff; }
+    .option-card.adv { border-color: #af52de; background: #faf0ff; }
+    .option-card .oc-badge {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .option-card.best .oc-badge { color: #007aff; }
+    .option-card.adv .oc-badge { color: #af52de; }
+    .option-card h3 { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+    .option-card p { font-size: 12px; color: #636366; line-height: 1.5; }
+    .option-card ul { font-size: 12px; color: #3a3a3c; padding-left: 14px; line-height: 1.8; margin-top: 6px; }
+
+    /* CONFIG TABLE */
+    .config-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid #f2f2f7;
+      font-size: 13px;
+    }
+    .config-row:last-child { border-bottom: none; }
+    .config-key { color: #636366; }
+    .config-val {
+      font-family: 'SF Mono', Menlo, monospace;
+      font-size: 11px;
+      background: #f2f2f7;
+      padding: 3px 8px;
+      border-radius: 6px;
+      color: #1c1c1e;
+      font-weight: 600;
+      max-width: 260px;
+      text-align: right;
+      word-break: break-all;
+    }
+
+    /* SIRI TRIGGER */
+    .siri-box {
+      background: linear-gradient(135deg, #007aff 0%, #5856d6 100%);
+      border-radius: 16px;
+      padding: 20px;
+      text-align: center;
+      color: white;
+      margin: 10px 0;
+    }
+    .siri-box .phrase { font-size: 18px; font-weight: 700; }
+    .siri-box .sub { font-size: 12px; opacity: 0.75; margin-top: 6px; }
+
+    footer {
+      text-align: center;
+      color: #8e8e93;
+      font-size: 11px;
+      padding: 30px 0 20px;
+    }
+
+    @media (max-width: 500px) {
+      .comparison { grid-template-columns: 1fr; }
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: #000; color: #f2f2f7; }
+      .card { background: #1c1c1e; box-shadow: none; }
+      .shortcut-flow { background: #2c2c2e; border-color: #3a3a3c; }
+      .sc-action { border-color: #3a3a3c; }
+      .config-val { background: #2c2c2e; color: #f2f2f7; }
+      .option-card.best { background: #001833; }
+      .option-card.adv { background: #1a0033; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="icon">🤖</span>
+  <h1>Chiedi a Jarvis da iPhone</h1>
+  <p>Guida completa Siri Shortcuts per NanoClaw Telegram</p>
+</header>
+
+<!-- SPIEGAZIONE PROBLEMA -->
+<div class="alert red">
+  <div class="alert-icon">❌</div>
+  <div class="alert-body">
+    <h3>Perché il messaggio appariva scritto da Jarvis?</h3>
+    <p>L'approccio precedente usava <code>sendMessage</code> della Bot API di Telegram. Questo invia un messaggio <strong>DAL bot A te</strong> — è come se Jarvis scrivesse a sé stesso. NanoClaw non lo vede mai come una domanda dell'utente.<br><br>
+    Per far funzionare Jarvis, devi essere <strong>TU a inviare</strong> il messaggio al bot (come fai normalmente su Telegram). Solo così NanoClaw lo intercetta, processa e risponde.</p>
+  </div>
+</div>
+
+<div class="alert green">
+  <div class="alert-icon">✅</div>
+  <div class="alert-body">
+    <h3>La soluzione corretta</h3>
+    <p>Usare lo <strong>URL scheme di Telegram</strong> (<code>tg://</code>) che apre la tua chat con Jarvis con il testo già pronto. Tu tocchi solo <strong>Invia</strong>. Jarvis risponde normalmente via notifica Telegram.</p>
+  </div>
+</div>
+
+<!-- SCELTA APPROCCIO -->
+<div class="section-label">🔀 Scegli il tuo shortcut</div>
+<div class="comparison">
+  <div class="option-card best">
+    <div class="oc-badge">⭐ Consigliato</div>
+    <h3>A — Veloce</h3>
+    <p>Apre Telegram con il testo pronto. Tocchi Invia. Jarvis risponde via notifica.</p>
+    <ul>
+      <li>Zero modifiche al codice</li>
+      <li>Un tap per inviare</li>
+      <li>Risposta come notifica</li>
+    </ul>
+  </div>
+  <div class="option-card adv">
+    <div class="oc-badge">🔬 Avanzato</div>
+    <h3>B — Hands-free</h3>
+    <p>Dici la domanda, Jarvis risponde ad alta voce. Nessun tap, nessuna app.</p>
+    <ul>
+      <li>Modifica a NanoClaw</li>
+      <li>HTTP API locale</li>
+      <li>Parla e ascolta</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ================================================ -->
+<!-- OPZIONE A -->
+<!-- ================================================ -->
+<div class="section-label">📱 Opzione A — Shortcut veloce (consigliato)</div>
+
+<div class="alert blue">
+  <div class="alert-icon">ℹ️</div>
+  <div class="alert-body">
+    <h3>Cosa ti serve prima di iniziare</h3>
+    <p>Il <strong>@username del tuo bot</strong> Jarvis. Aprilo in Telegram e guarda il nome sotto la foto profilo — è nel formato <code>@qualcosa_bot</code>. Sostituiscilo dove vedi <code>@TUO_BOT</code> in questa guida.</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>🔗 Struttura Shortcut A</h2>
+  <div class="shortcut-flow">
+    <div class="sc-action">
+      <div class="sc-icon blue">🎤</div>
+      <div class="sc-text">
+        <div class="sc-name">Dictate Text</div>
+        <div class="sc-desc">Registra la voce → testo<br>Language: Italian · Stop: After Pause</div>
+      </div>
+      <span class="sc-badge blue">1</span>
+    </div>
+    <div class="sc-action">
+      <div class="sc-icon orange">🔗</div>
+      <div class="sc-text">
+        <div class="sc-name">URL</div>
+        <div class="sc-desc"><code>tg://resolve?domain=@TUO_BOT&amp;text=[Dictated Text]</code></div>
+      </div>
+      <span class="sc-badge orange">2</span>
+    </div>
+    <div class="sc-action">
+      <div class="sc-icon green">📱</div>
+      <div class="sc-text">
+        <div class="sc-name">Open URLs</div>
+        <div class="sc-desc">Apre Telegram con il messaggio pre-scritto</div>
+      </div>
+      <span class="sc-badge green">3</span>
+    </div>
+  </div>
+  <div class="tip" style="margin-top:14px;">
+    <strong>Risultato:</strong> Telegram si apre sulla chat con Jarvis, con il testo già scritto. Tu tocchi solo il tasto <strong>Invia ↑</strong> e Jarvis elabora la risposta normalmente.
+  </div>
+</div>
+
+<div class="card">
+  <h2>📋 Passi Shortcut A — Dettagliati</h2>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content">
+      <h3>Crea un nuovo Shortcut</h3>
+      <p>Apri l'app <strong>Shortcuts</strong> → tocca <strong>+</strong> in alto a destra → tocca "Add Action" nella barra in basso.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content">
+      <h3>Cerca e aggiungi "Dictate Text"</h3>
+      <p>Nella barra di ricerca scrivi <strong>Dictate</strong> → seleziona <strong>Dictate Text</strong> (icona microfono viola).<br>
+      Nell'azione che appare configura:</p>
+      <ul>
+        <li><em>Language:</em> seleziona <strong>Italian</strong> dal menu a tendina</li>
+        <li><em>Stop Listening:</em> seleziona <strong>After Pause</strong></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content">
+      <h3>Aggiungi "URL"</h3>
+      <p>Tocca <strong>+</strong> sotto l'azione precedente → cerca <strong>URL</strong> → seleziona l'azione <strong>URL</strong> (non "Open URLs", quella dopo).<br><br>
+      Nel campo testo incolla:</p>
+      <div class="code-block">tg://resolve?domain=@TUO_BOT&amp;text=<span class="h">[Dictated Text]</span></div>
+      <div class="tip">
+        <strong>Come inserire [Dictated Text]:</strong> dopo aver incollato <code>tg://resolve?domain=@TUO_BOT&amp;text=</code>, tocca l'area testo e poi il pulsante delle <strong>variabili</strong> (icona a forma di quadratino con freccia, in basso a destra della tastiera). Seleziona <strong>"Dictated Text"</strong> dalla lista — apparirà come una pillola blu nel campo URL.
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content">
+      <h3>Aggiungi "Open URLs"</h3>
+      <p>Tocca <strong>+</strong> → cerca <strong>Open URLs</strong> → selezionalo.<br>
+      Nel campo <em>URL</em> dell'azione seleziona la <strong>magic variable "URL"</strong> (la variabile prodotta dall'azione precedente, apparirà come pillola arancione).</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-content">
+      <h3>Assegna nome e frase Siri</h3>
+      <p>Tocca il nome dello shortcut in alto → rinomina in <strong>"Jarvis"</strong>.<br>
+      Poi tocca l'icona ⋮ (tre punti) in alto a destra → <strong>Add to Siri</strong> → registra la frase:<br>
+      <strong>"Hey Siri, Jarvis"</strong> oppure <strong>"Chiedi a Jarvis"</strong>.</p>
+    </div>
+  </div>
+
+  <div class="siri-box" style="margin-top: 16px;">
+    <div class="phrase">«Hey Siri, Jarvis»</div>
+    <div class="sub">poi parla → Telegram si apre con il testo pronto → tocchi Invia</div>
+  </div>
+</div>
+
+<!-- ================================================ -->
+<!-- OPZIONE B -->
+<!-- ================================================ -->
+<div class="section-label">🚀 Opzione B — Hands-free con risposta vocale</div>
+
+<div class="alert blue">
+  <div class="alert-icon">⚙️</div>
+  <div class="alert-body">
+    <h3>Come funziona</h3>
+    <p>Aggiungiamo un piccolo server HTTP a NanoClaw che gira sul tuo Mac. Il tuo iPhone (sulla stessa WiFi) chiama questo server, che inserisce il messaggio direttamente nella pipeline e restituisce la risposta. Lo shortcut la legge ad alta voce.</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>🔗 Struttura Shortcut B</h2>
+  <div class="shortcut-flow">
+    <div class="sc-action">
+      <div class="sc-icon blue">🎤</div>
+      <div class="sc-text">
+        <div class="sc-name">Dictate Text</div>
+        <div class="sc-desc">Registra la voce → testo · Italian · After Pause</div>
+      </div>
+      <span class="sc-badge blue">1</span>
+    </div>
+    <div class="sc-action">
+      <div class="sc-icon orange">🌐</div>
+      <div class="sc-text">
+        <div class="sc-name">Get Contents of URL</div>
+        <div class="sc-desc">POST http://MAC_IP:3399/ask · body JSON: {"text": [Dictated Text]}</div>
+      </div>
+      <span class="sc-badge orange">2</span>
+    </div>
+    <div class="sc-action">
+      <div class="sc-icon purple">🔍</div>
+      <div class="sc-text">
+        <div class="sc-name">Get Dictionary Value</div>
+        <div class="sc-desc">Estrai il campo <strong>response</strong> dal JSON restituito</div>
+      </div>
+      <span class="sc-badge purple">3</span>
+    </div>
+    <div class="sc-action">
+      <div class="sc-icon green">🔊</div>
+      <div class="sc-text">
+        <div class="sc-name">Speak Text</div>
+        <div class="sc-desc">Legge la risposta di Jarvis ad alta voce</div>
+      </div>
+      <span class="sc-badge green">4</span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>⚙️ Passo 1 — Trova l'IP del tuo Mac</h2>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content">
+      <h3>Apri Terminale sul Mac</h3>
+      <p>Vai su <strong>Applicazioni → Utility → Terminale</strong> e lancia il comando:</p>
+      <div class="code-block">ipconfig getifaddr en0</div>
+      <p style="margin-top:8px;">Otterrai qualcosa come <code>192.168.1.15</code>. Questo è il tuo MAC_IP da usare nello shortcut.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content">
+      <h3>Verifica che iPhone e Mac siano sulla stessa WiFi</h3>
+      <p>Entrambi devono essere connessi alla stessa rete domestica. Se l'iPhone è su dati mobili non funzionerà (a meno di aggiungere un tunnel pubblico con Cloudflare o ngrok — configurazione avanzata).</p>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>⚙️ Passo 2 — Aggiungi il server HTTP a NanoClaw</h2>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content">
+      <h3>Crea il file <code>src/http-api.ts</code></h3>
+      <p>Questo file è già stato creato nella cartella del progetto. Contiene un server HTTP minimale sulla porta <strong>3399</strong> che accetta domande e le inietta direttamente nella pipeline di Jarvis.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content">
+      <h3>Avvia (o riavvia) NanoClaw</h3>
+      <p>Dopo aver aggiunto il file, riavvia il servizio:</p>
+      <div class="code-block">launchctl kickstart -k gui/$(id -u)/com.nanoclaw</div>
+      <p style="margin-top:8px;">Da quel momento il server HTTP sarà disponibile su <code>http://MAC_IP:3399</code>.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content">
+      <h3>Testa dal Terminale</h3>
+      <p>Prima di configurare lo shortcut, verifica che funzioni:</p>
+      <div class="code-block">curl -X POST http://localhost:3399/ask \
+  -H "Content-Type: application/json" \
+  -d '{"text": "ciao Jarvis, come stai?"}'</div>
+      <p style="margin-top:8px;">Dovresti ricevere un JSON con la risposta di Jarvis entro qualche secondo.</p>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>📋 Passi Shortcut B — Dettagliati</h2>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content">
+      <h3>Aggiungi "Dictate Text"</h3>
+      <p>Come nell'Opzione A: cerca <strong>Dictate Text</strong>, imposta Italian e After Pause.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num orange">2</div>
+    <div class="step-content">
+      <h3>Aggiungi "Get Contents of URL"</h3>
+      <p>Cerca e aggiungi l'azione <strong>Get Contents of URL</strong>. Configurala così:</p>
+      <ul>
+        <li><em>URL:</em> <code>http://192.168.1.XX:3399/ask</code> (sostituisci con il tuo IP)</li>
+        <li><em>Method:</em> tocca <strong>GET</strong> e cambia in <strong>POST</strong></li>
+        <li><em>Headers:</em> tocca <strong>Add new header</strong><br>
+          Key: <code>Content-Type</code> · Value: <code>application/json</code></li>
+        <li><em>Request Body:</em> tocca e seleziona <strong>JSON</strong></li>
+      </ul>
+      <div class="tip">
+        <strong>Configurare il body JSON:</strong> dopo aver selezionato JSON come tipo di body, apparirà una sezione con dei campi. Tocca <strong>"Add new field"</strong> → scegli tipo <strong>Text</strong> → scrivi come chiave <code>text</code> → nel campo valore tocca il campo e poi il pulsante variabili (in basso a destra della tastiera) → seleziona <strong>"Dictated Text"</strong>.
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num purple">3</div>
+    <div class="step-content">
+      <h3>Aggiungi "Get Dictionary Value"</h3>
+      <p>Cerca <strong>Get Dictionary Value</strong>.<br>
+      Configura:</p>
+      <ul>
+        <li><em>Get:</em> lascia su <strong>Value</strong></li>
+        <li><em>for Key:</em> scrivi <code>response</code></li>
+        <li><em>from:</em> seleziona la magic variable <strong>"Contents of URL"</strong> (la pillola arancione dell'azione precedente)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num" style="background:#34c759;">4</div>
+    <div class="step-content">
+      <h3>Aggiungi "Speak Text"</h3>
+      <p>Cerca <strong>Speak Text</strong>.<br>
+      Nel campo testo seleziona la magic variable <strong>"Dictionary Value"</strong> dall'azione precedente.<br><br>
+      Opzionale: imposta <em>Language</em> su <strong>Italian (Italy)</strong> per una voce italiana.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-content">
+      <h3>Rinomina e aggiungi a Siri</h3>
+      <p>Rinomina lo shortcut in <strong>"Jarvis"</strong> → ⋮ → <strong>Add to Siri</strong> → registra la frase.</p>
+    </div>
+  </div>
+
+  <div class="siri-box" style="margin-top: 16px;">
+    <div class="phrase">«Hey Siri, Jarvis»</div>
+    <div class="sub">parla → attendi qualche secondo → Jarvis risponde ad alta voce</div>
+  </div>
+</div>
+
+<!-- NOTE FINALI -->
+<div class="card">
+  <h2>💡 Consigli pratici</h2>
+
+  <div class="step">
+    <div class="step-num" style="background:#636366; font-size:16px;">🔒</div>
+    <div class="step-content">
+      <h3>Sicurezza del server HTTP</h3>
+      <p>Il server gira solo sulla rete locale e non è accessibile da internet. Se vuoi usarlo fuori casa, aggiungi Cloudflare Tunnel o Tailscale — configurazione avanzata su richiesta.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num" style="background:#636366; font-size:16px;">⌚</div>
+    <div class="step-content">
+      <h3>Apple Watch</h3>
+      <p>Gli shortcut Siri funzionano anche sull'Apple Watch. Con l'Opzione A, puoi tenere il polso davanti alla bocca e dire <strong>"Hey Siri, Jarvis"</strong> — il watch apre Telegram (se installato) oppure invia direttamente.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num" style="background:#636366; font-size:16px;">🏠</div>
+    <div class="step-content">
+      <h3>Widget schermata di blocco</h3>
+      <p>Su iOS 16+ puoi aggiungere lo shortcut come widget nella schermata di blocco: <strong>Impostazioni → Schermata di blocco → Personalizza → Widget</strong>. Tap sul widget → apre Telegram già pronto per scrivere.</p>
+    </div>
+  </div>
+</div>
+
+<footer>
+  NanoClaw · Jarvis Shortcut Guide v2 · generato automaticamente
+</footer>
+
+</body>
+</html>

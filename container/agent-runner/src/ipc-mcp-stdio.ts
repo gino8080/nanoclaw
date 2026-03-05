@@ -63,18 +63,148 @@ server.tool(
 );
 
 server.tool(
+  'send_image',
+  `Send an image file to the user/group chat. Use this to show images that exist on disk (e.g. generated images, downloaded photos, processed files).
+The image appears directly in the Telegram chat as a photo.`,
+  {
+    file_path: z
+      .string()
+      .describe(
+        'Absolute path to the image file (e.g. /workspace/extra/NANO_CLAW_DATA/images/photo.jpg)',
+      ),
+    caption: z.string().optional().describe('Optional caption for the image'),
+    sender: z
+      .string()
+      .optional()
+      .describe(
+        'Your role/identity name (e.g. "Researcher"). When set, the image is sent from a dedicated bot.',
+      ),
+  },
+  async (args) => {
+    try {
+      if (!fs.existsSync(args.file_path)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `File not found: ${args.file_path}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const imageBuffer = fs.readFileSync(args.file_path);
+      const base64 = imageBuffer.toString('base64');
+
+      writeIpcFile(MESSAGES_DIR, {
+        type: 'send_image',
+        chatJid,
+        image_base64: base64,
+        caption: args.caption || undefined,
+        sender: args.sender || undefined,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+
+      return {
+        content: [
+          { type: 'text' as const, text: 'Image sent to chat.' },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Failed to send image: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
+  'send_file',
+  `Send a file/document to the user/group chat. Use this to share any file: reports, PDFs, markdown, code, etc.
+The file appears as a downloadable document in the Telegram chat.
+For images (jpg/png/gif/webp), prefer send_image instead — it renders inline.`,
+  {
+    file_path: z
+      .string()
+      .describe(
+        'Absolute path to the file (e.g. /workspace/extra/NANO_CLAW_DATA/reports/daily.md)',
+      ),
+    caption: z.string().optional().describe('Optional caption for the file'),
+    sender: z
+      .string()
+      .optional()
+      .describe('Your role/identity name for swarm bots.'),
+  },
+  async (args) => {
+    try {
+      if (!fs.existsSync(args.file_path)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `File not found: ${args.file_path}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const fileBuffer = fs.readFileSync(args.file_path);
+      const base64 = fileBuffer.toString('base64');
+      const filename = path.basename(args.file_path);
+
+      writeIpcFile(MESSAGES_DIR, {
+        type: 'send_file',
+        chatJid,
+        file_base64: base64,
+        filename,
+        caption: args.caption || undefined,
+        sender: args.sender || undefined,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+
+      return {
+        content: [
+          { type: 'text' as const, text: `File "${filename}" sent to chat.` },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Failed to send file: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
   'generate_image',
-  `Generate or modify an image using AI (Gemini 3.1 Flash Image). Returns the image as base64 PNG.
+  `Generate or modify an image using an external AI model (Gemini). This is the ONLY way to create or edit images — do NOT use ImageMagick, ffmpeg, sharp, or any local tool for image generation/modification. Always use this tool instead.
 
-Use cases:
-• Generate from text: "A sunset over mountains"
-• Modify an existing image: provide base64 + prompt like "Remove the background"
-• Create diagrams, illustrations, icons, or any visual content
+GENERATE a new image: just provide a prompt.
+MODIFY an existing image: provide image_base64 + a prompt describing the edit (e.g. "remove the background", "make it black and white", "resize to 640x360", "add a watermark").
 
-Image config defaults: 1K resolution, 1:1 aspect ratio. Override with parameters below.
+To modify a user's photo from Telegram (saved at /workspace/ipc/media/):
+  1. Read it: base64 -i /workspace/ipc/media/photo-xxx.jpg (via Bash)
+  2. Pass the output as image_base64 + your modification prompt
 
-The generated image is saved to the mounted data directory (/workspace/extra/) or /workspace/group/.
-Send the image to the user via send_message with a link or description.`,
+The result is automatically sent to the chat AND saved to disk. No need to call send_image after.
+
+Image config defaults: 1K resolution, 1:1 aspect ratio. Override with parameters below.`,
   {
     prompt: z
       .string()

@@ -22,7 +22,9 @@
     "logs:host": "bash scripts/logs.sh host",
     "logs:agents": "bash scripts/logs.sh agents",
     "logs:pool": "bash scripts/logs.sh pool",
-    "logs:errors": "bash scripts/logs.sh errors"
+    "logs:errors": "bash scripts/logs.sh errors",
+    "reload": "npm run build && (launchctl kickstart -k gui/$(id -u)/com.nanoclaw || launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist) && echo '✓ NanoClaw rebuilt and restarted'",
+    "stop": "launchctl bootout gui/$(id -u)/com.nanoclaw 2>/dev/null; echo '✓ NanoClaw stopped'"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",

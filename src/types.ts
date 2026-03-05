@@ -88,6 +88,13 @@ export interface Channel {
   disconnect(): Promise<void>;
   // Optional: send a photo/image to the chat.
   sendPhoto?(jid: string, photo: Buffer, caption?: string): Promise<void>;
+  // Optional: send a document/file to the chat.
+  sendDocument?(
+    jid: string,
+    file: Buffer,
+    filename: string,
+    caption?: string,
+  ): Promise<void>;
   // Optional: typing indicator. Channels that support it implement it.
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.

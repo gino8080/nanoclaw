@@ -8,6 +8,7 @@ import {
   TELEGRAM_BOT_POOL,
   TRIGGER_PATTERN,
 } from './config.js';
+import { startHttpApi } from './http-api.js';
 import './channels/index.js';
 import { initBotPool } from './channels/telegram.js';
 import {
@@ -575,6 +576,13 @@ async function main(): Promise<void> {
       }
       return channel.sendPhoto(jid, photo, caption);
     },
+    sendDocument: (jid, file, filename, caption) => {
+      const channel = findChannel(channels, jid);
+      if (!channel || !channel.sendDocument) {
+        throw new Error(`No document-capable channel for JID: ${jid}`);
+      }
+      return channel.sendDocument(jid, file, filename, caption);
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {
@@ -588,6 +596,12 @@ async function main(): Promise<void> {
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
   });
+  // HTTP API for Siri Shortcuts integration (iPhone → Jarvis without opening Telegram)
+  startHttpApi({
+    getRegisteredGroups: () => registeredGroups,
+    runAgent,
+  });
+
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
   startMessageLoop().catch((err) => {
