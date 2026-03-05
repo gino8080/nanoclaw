@@ -30,6 +30,7 @@ import { RegisteredGroup } from './types.js';
 const MAC_IP = process.env.MAC_IP ?? '192.168.10.130';
 const HTTP_API_PORT = parseInt(process.env.HTTP_API_PORT ?? '3399', 10);
 const MAX_BODY_BYTES = 16_000;
+const API_TOKEN = process.env.HTTP_API_TOKEN ?? '';
 /** Max seconds to wait for the agent to respond before giving up. */
 const RESPONSE_TIMEOUT_MS = 120_000;
 
@@ -90,7 +91,7 @@ export function startHttpApi(deps: HttpApiDeps): void {
         res.writeHead(204, {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
         });
         res.end();
         return;
@@ -100,6 +101,15 @@ export function startHttpApi(deps: HttpApiDeps): void {
       if (req.method === 'GET' && req.url === '/health') {
         json(res, 200, { ok: true, busy: activeRequest });
         return;
+      }
+
+      // Bearer token auth (required when HTTP_API_TOKEN is set)
+      if (API_TOKEN) {
+        const auth = req.headers['authorization'];
+        if (auth !== `Bearer ${API_TOKEN}`) {
+          json(res, 401, { error: 'Unauthorized' });
+          return;
+        }
       }
 
       if (req.method !== 'POST' || req.url !== '/ask') {
