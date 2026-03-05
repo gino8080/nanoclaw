@@ -96,7 +96,9 @@ export function startIpcWatcher(deps: IpcDeps): void {
                       chatJid: data.chatJid,
                       sourceGroup,
                       sender: data.sender || undefined,
-                      viaPool: !!(data.sender && data.chatJid.startsWith('tg:')),
+                      viaPool: !!(
+                        data.sender && data.chatJid.startsWith('tg:')
+                      ),
                     },
                     'IPC message sent',
                   );
