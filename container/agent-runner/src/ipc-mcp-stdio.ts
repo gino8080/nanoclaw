@@ -63,6 +63,162 @@ server.tool(
 );
 
 server.tool(
+  'generate_image',
+  `Generate or modify an image using AI (Gemini 3.1 Flash Image). Returns the image as base64 PNG.
+
+Use cases:
+• Generate from text: "A sunset over mountains"
+• Modify an existing image: provide base64 + prompt like "Remove the background"
+• Create diagrams, illustrations, icons, or any visual content
+
+Image config defaults: 1K resolution, 1:1 aspect ratio. Override with parameters below.
+
+The generated image is saved to the mounted data directory (/workspace/extra/) or /workspace/group/.
+Send the image to the user via send_message with a link or description.`,
+  {
+    prompt: z
+      .string()
+      .describe('Text prompt describing the image to generate or how to modify it'),
+    image_base64: z
+      .string()
+      .optional()
+      .describe('Base64-encoded source image for modifications (optional)'),
+    aspect_ratio: z
+      .enum([
+        '1:1',
+        '2:3',
+        '3:2',
+        '3:4',
+        '4:3',
+        '4:5',
+        '5:4',
+        '9:16',
+        '16:9',
+        '21:9',
+        '1:4',
+        '4:1',
+        '1:8',
+        '8:1',
+      ])
+      .optional()
+      .describe(
+        'Aspect ratio (default: 1:1). Extended ratios 1:4, 4:1, 1:8, 8:1 for tall/wide formats.',
+      ),
+    image_size: z
+      .enum(['0.5K', '1K', '2K', '4K'])
+      .optional()
+      .describe('Output resolution (default: 1K). 0.5K=low-res/fast, 4K=high-res.'),
+    filename: z
+      .string()
+      .optional()
+      .describe(
+        'Output filename (default: generated-{timestamp}.png). Saved in the mounted data directory.',
+      ),
+  },
+  async (args) => {
+    const webhookUrl = process.env.IMAGE_WEBHOOK_URL;
+    if (!webhookUrl) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Image generation not configured. IMAGE_WEBHOOK_URL not set.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    try {
+      const body: Record<string, string> = { prompt: args.prompt };
+      if (args.image_base64) {
+        body.image_base64 = args.image_base64;
+      }
+      if (args.aspect_ratio) {
+        body.aspect_ratio = args.aspect_ratio;
+      }
+      if (args.image_size) {
+        body.image_size = args.image_size;
+      }
+
+      const res = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(120_000),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Image generation failed (${res.status}): ${errText.slice(0, 200)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const result = (await res.json()) as {
+        success: boolean;
+        image_base64?: string;
+        text?: string;
+      };
+
+      if (!result.success || !result.image_base64) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Image generation returned no image. ${result.text || 'No details.'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Save to /workspace/extra/ (mounted data directory) or fallback to /workspace/group/
+      const outName =
+        args.filename || `generated-${Date.now()}.png`;
+      const extraBase = '/workspace/extra';
+      let outDir = '/workspace/group';
+      if (fs.existsSync(extraBase)) {
+        const dirs = fs.readdirSync(extraBase).filter((d) =>
+          fs.statSync(path.join(extraBase, d)).isDirectory(),
+        );
+        if (dirs.length > 0) {
+          outDir = path.join(extraBase, dirs[0], 'images');
+        }
+      }
+      fs.mkdirSync(outDir, { recursive: true });
+      const outPath = path.join(outDir, outName);
+      fs.writeFileSync(outPath, Buffer.from(result.image_base64, 'base64'));
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Image saved to ${outPath} (${Math.round(result.image_base64.length * 0.75 / 1024)}KB). ${result.text || ''}`.trim(),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Image generation error: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools.
 
