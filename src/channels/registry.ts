@@ -5,10 +5,17 @@ import {
   RegisteredGroup,
 } from '../types.js';
 
+export interface AdminCommands {
+  resetSession: (groupFolder: string) => string;
+  getStatus: () => string;
+  restart: () => void;
+}
+
 export interface ChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  adminCommands?: AdminCommands;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

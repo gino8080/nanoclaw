@@ -10,7 +10,7 @@ import {
 } from './config.js';
 import { startHttpApi } from './http-api.js';
 import './channels/index.js';
-import { initBotPool } from './channels/telegram.js';
+import { initBotPool, sendPoolMessage } from './channels/telegram.js';
 import {
   getChannelFactory,
   getRegisteredChannelNames,
@@ -36,6 +36,7 @@ import {
   initDatabase,
   setRegisteredGroup,
   setRouterState,
+  deleteSession,
   setSession,
   storeChatMetadata,
   storeMessage,
@@ -62,6 +63,8 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+const consecutiveFailures: Record<string, number> = {};
+const SESSION_RESET_THRESHOLD = 3;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -253,18 +256,40 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         { group: group.name },
         'Agent error after output was sent, skipping cursor rollback to prevent duplicates',
       );
+      consecutiveFailures[chatJid] = 0;
       return true;
     }
+
+    // Auto-recovery: clear corrupted session after repeated failures
+    consecutiveFailures[chatJid] = (consecutiveFailures[chatJid] || 0) + 1;
+    if (
+      consecutiveFailures[chatJid] >= SESSION_RESET_THRESHOLD &&
+      sessions[group.folder]
+    ) {
+      logger.warn(
+        {
+          group: group.name,
+          failures: consecutiveFailures[chatJid],
+          sessionId: sessions[group.folder],
+        },
+        'Too many consecutive failures — resetting session',
+      );
+      delete sessions[group.folder];
+      deleteSession(group.folder);
+      consecutiveFailures[chatJid] = 0;
+    }
+
     // Roll back cursor so retries can re-process these messages
     lastAgentTimestamp[chatJid] = previousCursor;
     saveState();
     logger.warn(
-      { group: group.name },
+      { group: group.name, failures: consecutiveFailures[chatJid] },
       'Agent error, rolled back message cursor for retry',
     );
     return false;
   }
 
+  consecutiveFailures[chatJid] = 0;
   return true;
 }
 
@@ -520,6 +545,44 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    adminCommands: {
+      resetSession: (groupFolder: string) => {
+        const had = !!sessions[groupFolder];
+        delete sessions[groupFolder];
+        deleteSession(groupFolder);
+        consecutiveFailures[
+          Object.entries(registeredGroups).find(
+            ([, g]) => g.folder === groupFolder,
+          )?.[0] ?? ''
+        ] = 0;
+        logger.info({ groupFolder }, 'Session reset via /reset command');
+        return had
+          ? `✅ Session for \`${groupFolder}\` cleared. Next message starts fresh.`
+          : `ℹ️ No active session for \`${groupFolder}\`.`;
+      },
+      getStatus: () => {
+        const uptime = process.uptime();
+        const h = Math.floor(uptime / 3600);
+        const m = Math.floor((uptime % 3600) / 60);
+        const groupList = Object.entries(registeredGroups)
+          .map(([jid, g]) => {
+            const hasSession = sessions[g.folder] ? '🟢' : '⚪';
+            const failures = consecutiveFailures[jid] || 0;
+            const failStr = failures > 0 ? ` ⚠️${failures} fails` : '';
+            return `${hasSession} ${g.name} (${g.folder})${failStr}`;
+          })
+          .join('\n');
+        return [
+          `*NanoClaw Status*`,
+          `⏱ Uptime: ${h}h ${m}m`,
+          `📦 Groups:\n${groupList}`,
+        ].join('\n');
+      },
+      restart: () => {
+        logger.info('Restart requested via /restart command');
+        process.exit(0);
+      },
+    },
   };
 
   // Create and connect all registered channels.
@@ -610,6 +673,7 @@ async function main(): Promise<void> {
       }
       await channel.sendMessage(jid, text);
     },
+    sendPoolMessage,
   });
 
   queue.setProcessMessagesFn(processGroupMessages);

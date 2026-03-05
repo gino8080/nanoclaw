@@ -15,6 +15,9 @@
  *   the HTTP request doesn't collide with the real Telegram group queue state.
  * - The agent response is captured via the onOutput callback and returned
  *   directly to the HTTP client — it does NOT go through Telegram.
+ * - We do NOT await runAgent() to completion because the container stays alive
+ *   in persistent mode. Instead we resolve as soon as the agent emits a
+ *   status:"success" output marker (meaning the query is done).
  */
 
 import { createServer, IncomingMessage, ServerResponse } from 'http';
@@ -27,6 +30,8 @@ import { RegisteredGroup } from './types.js';
 const MAC_IP = process.env.MAC_IP ?? '192.168.10.130';
 const HTTP_API_PORT = parseInt(process.env.HTTP_API_PORT ?? '3399', 10);
 const MAX_BODY_BYTES = 16_000;
+/** Max seconds to wait for the agent to respond before giving up. */
+const RESPONSE_TIMEOUT_MS = 120_000;
 
 export interface HttpApiDeps {
   getRegisteredGroups: () => Record<string, RegisteredGroup>;
@@ -38,6 +43,12 @@ export interface HttpApiDeps {
     opts?: { singleQuery?: boolean },
   ) => Promise<'success' | 'error'>;
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendPoolMessage: (
+    chatId: string,
+    text: string,
+    sender: string,
+    groupFolder: string,
+  ) => Promise<void>;
 }
 
 /** Read the full request body (capped at MAX_BODY_BYTES). */
@@ -150,39 +161,70 @@ export function startHttpApi(deps: HttpApiDeps): void {
       logger.info({ text: text.slice(0, 80) }, 'HTTP API request received');
       activeRequest = true;
 
-      // --- Run the agent and collect streamed output ---
+      // -------------------------------------------------------------------
+      // Run the agent but DON'T await it to completion.
+      // The container stays alive in persistent mode; runAgent only resolves
+      // when the container exits (which may take 30+ minutes).
+      // Instead we race: resolve as soon as the onOutput callback receives
+      // a status:"success" marker, or timeout after RESPONSE_TIMEOUT_MS.
+      // -------------------------------------------------------------------
       const parts: string[] = [];
-      try {
-        const status = await deps.runAgent(
-          group,
-          prompt,
-          httpJid,
-          async (output: ContainerOutput) => {
-            if (output.result) {
-              const raw =
-                typeof output.result === 'string'
-                  ? output.result
-                  : JSON.stringify(output.result);
-              const cleaned = stripInternalTags(raw);
-              if (cleaned) parts.push(cleaned);
-            }
-          },
-          { singleQuery: true },
-        );
 
-        if (status === 'error' && parts.length === 0) {
-          json(res, 500, { error: 'Agent returned an error with no output.' });
-          return;
-        }
+      // This promise resolves when the agent emits its first complete answer.
+      const responseReady = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(
+            new Error(
+              `Agent did not respond within ${RESPONSE_TIMEOUT_MS / 1000}s`,
+            ),
+          );
+        }, RESPONSE_TIMEOUT_MS);
+
+        const onOutput = async (output: ContainerOutput) => {
+          // Collect text parts
+          if (output.result) {
+            const raw =
+              typeof output.result === 'string'
+                ? output.result
+                : JSON.stringify(output.result);
+            const cleaned = stripInternalTags(raw);
+            if (cleaned) parts.push(cleaned);
+          }
+
+          // status:"success" means the query is done — resolve immediately.
+          // status:"error" also means done (with failure).
+          if (output.status === 'success' || output.status === 'error') {
+            clearTimeout(timer);
+            if (output.status === 'error' && parts.length === 0) {
+              reject(new Error(output.error || 'Agent returned an error'));
+            } else {
+              resolve();
+            }
+          }
+        };
+
+        // Fire-and-forget: let the container run in the background.
+        // We only care about the onOutput callbacks, not when runAgent returns.
+        deps
+          .runAgent(group, prompt, httpJid, onOutput, { singleQuery: true })
+          .catch((err) => {
+            clearTimeout(timer);
+            reject(err);
+          });
+      });
+
+      try {
+        await responseReady;
       } catch (err: unknown) {
         logger.error({ err }, 'HTTP API agent error');
         json(res, 500, {
           error: `Agent error: ${err instanceof Error ? err.message : String(err)}`,
         });
-        return;
-      } finally {
         activeRequest = false;
+        return;
       }
+
+      activeRequest = false;
 
       const response = parts.join('\n\n') || '(nessuna risposta)';
       logger.info(
@@ -190,13 +232,24 @@ export function startHttpApi(deps: HttpApiDeps): void {
         'HTTP API response ready',
       );
 
-      // Mirror the exchange to Telegram so it appears in chat history
-      deps
-        .sendMessage(mainJid, `🎙️ *Siri:* ${text}`)
-        .then(() => deps.sendMessage(mainJid, response))
-        .catch((err) =>
-          logger.warn({ err }, 'Failed to mirror HTTP API exchange to Telegram'),
-        );
+      // Mirror the exchange to the AGENTS group chat (not the private main chat).
+      // User question goes via a pool bot named "Siri 🎙️";
+      // Jarvis response goes via the main bot.
+      const agentsGroup = Object.entries(groups).find(
+        ([jid, g]) => !g.isMain && jid.startsWith('tg:'),
+      );
+      if (agentsGroup) {
+        const [agentsJid, agentsG] = agentsGroup;
+        deps
+          .sendPoolMessage(agentsJid, `🗣️ ${text}`, 'Siri 🎙️', agentsG.folder)
+          .then(() => deps.sendMessage(agentsJid, response))
+          .catch((err) =>
+            logger.warn(
+              { err },
+              'Failed to mirror HTTP API exchange to Telegram',
+            ),
+          );
+      }
 
       json(res, 200, { response, ok: true });
     },

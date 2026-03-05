@@ -6,7 +6,7 @@ import { Api, Bot, InputFile } from 'grammy';
 import { ASSISTANT_NAME, DATA_DIR, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
-import { registerChannel, ChannelOpts } from './registry.js';
+import { registerChannel, ChannelOpts, AdminCommands } from './registry.js';
 import {
   Channel,
   OnChatMetadata,
@@ -18,6 +18,7 @@ export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  adminCommands?: AdminCommands;
 }
 
 export class TelegramChannel implements Channel {
@@ -54,6 +55,31 @@ export class TelegramChannel implements Channel {
     this.bot.command('ping', (ctx) => {
       ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
+
+    // Admin commands (only work in registered groups)
+    if (this.opts.adminCommands) {
+      const admin = this.opts.adminCommands;
+
+      this.bot.command('reset', (ctx) => {
+        const chatJid = `tg:${ctx.chat.id}`;
+        const group = this.opts.registeredGroups()[chatJid];
+        if (!group) {
+          ctx.reply('⚠️ This chat is not a registered group.');
+          return;
+        }
+        const result = admin.resetSession(group.folder);
+        ctx.reply(result, { parse_mode: 'Markdown' });
+      });
+
+      this.bot.command('status', (ctx) => {
+        ctx.reply(admin.getStatus(), { parse_mode: 'Markdown' });
+      });
+
+      this.bot.command('restart', (ctx) => {
+        ctx.reply('♻️ Restarting NanoClaw...');
+        setTimeout(() => admin.restart(), 500);
+      });
+    }
 
     this.bot.on('message:text', async (ctx) => {
       // Skip commands
