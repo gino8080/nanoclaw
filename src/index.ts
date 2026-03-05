@@ -602,6 +602,14 @@ async function main(): Promise<void> {
   startHttpApi({
     getRegisteredGroups: () => registeredGroups,
     runAgent,
+    sendMessage: async (jid, text) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) {
+        logger.warn({ jid }, 'No channel for JID, cannot mirror HTTP message');
+        return;
+      }
+      await channel.sendMessage(jid, text);
+    },
   });
 
   queue.setProcessMessagesFn(processGroupMessages);

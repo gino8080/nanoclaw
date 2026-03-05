@@ -37,6 +37,7 @@ export interface HttpApiDeps {
     onOutput?: (output: ContainerOutput) => Promise<void>,
     opts?: { singleQuery?: boolean },
   ) => Promise<'success' | 'error'>;
+  sendMessage: (jid: string, text: string) => Promise<void>;
 }
 
 /** Read the full request body (capped at MAX_BODY_BYTES). */
@@ -126,7 +127,7 @@ export function startHttpApi(deps: HttpApiDeps): void {
         json(res, 503, { error: 'No main group registered in NanoClaw' });
         return;
       }
-      const [, group] = mainEntry;
+      const [mainJid, group] = mainEntry;
 
       // Use a synthetic JID so the queue doesn't conflict with the real
       // Telegram group. Each HTTP request gets its own unique JID.
@@ -188,6 +189,15 @@ export function startHttpApi(deps: HttpApiDeps): void {
         { responseLength: response.length },
         'HTTP API response ready',
       );
+
+      // Mirror the exchange to Telegram so it appears in chat history
+      deps
+        .sendMessage(mainJid, `🎙️ *Siri:* ${text}`)
+        .then(() => deps.sendMessage(mainJid, response))
+        .catch((err) =>
+          logger.warn({ err }, 'Failed to mirror HTTP API exchange to Telegram'),
+        );
+
       json(res, 200, { response, ok: true });
     },
   );
