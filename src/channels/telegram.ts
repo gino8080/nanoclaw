@@ -543,7 +543,10 @@ export async function sendPoolDocument(
       new InputFile(fileBuffer, filename),
       caption ? { caption } : undefined,
     );
-    logger.info({ chatId, sender, poolIndex: idx, filename }, 'Pool document sent');
+    logger.info(
+      { chatId, sender, poolIndex: idx, filename },
+      'Pool document sent',
+    );
   } catch (err) {
     logger.error({ chatId, sender, err }, 'Failed to send pool document');
   }

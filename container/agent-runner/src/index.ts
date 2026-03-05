@@ -26,6 +26,7 @@ interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  singleQuery?: boolean;
   assistantName?: string;
   secrets?: Record<string, string>;
 }
@@ -365,6 +366,12 @@ async function runQuery(
   const stream = new MessageStream();
   stream.push(prompt);
 
+  // Single-query mode: end the stream immediately so the SDK exits
+  // after processing the first prompt (no IPC wait loop).
+  if (containerInput.singleQuery) {
+    stream.end();
+  }
+
   // Poll IPC for follow-up messages and _close sentinel during the query
   let ipcPolling = true;
   let closedDuringQuery = false;
@@ -555,6 +562,12 @@ async function main(): Promise<void> {
       // idle timer and cause a 30-min delay before the next _close).
       if (queryResult.closedDuringQuery) {
         log('Close sentinel consumed during query, exiting');
+        break;
+      }
+
+      // Single-query mode (HTTP API): exit after the first query.
+      if (containerInput.singleQuery) {
+        log('Single-query mode, exiting after first result');
         break;
       }
 

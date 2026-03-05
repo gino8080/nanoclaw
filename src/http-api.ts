@@ -35,6 +35,7 @@ export interface HttpApiDeps {
     prompt: string,
     chatJid: string,
     onOutput?: (output: ContainerOutput) => Promise<void>,
+    opts?: { singleQuery?: boolean },
   ) => Promise<'success' | 'error'>;
 }
 
@@ -96,7 +97,9 @@ export function startHttpApi(deps: HttpApiDeps): void {
 
       // Prevent concurrent requests (one Siri call at a time)
       if (activeRequest) {
-        json(res, 429, { error: 'Jarvis is already thinking. Try again in a moment.' });
+        json(res, 429, {
+          error: 'Jarvis is already thinking. Try again in a moment.',
+        });
         return;
       }
 
@@ -163,6 +166,7 @@ export function startHttpApi(deps: HttpApiDeps): void {
               if (cleaned) parts.push(cleaned);
             }
           },
+          { singleQuery: true },
         );
 
         if (status === 'error' && parts.length === 0) {

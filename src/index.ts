@@ -273,6 +273,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  opts?: { singleQuery?: boolean },
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
@@ -322,6 +323,7 @@ async function runAgent(
         groupFolder: group.folder,
         chatJid,
         isMain,
+        singleQuery: opts?.singleQuery,
         assistantName: ASSISTANT_NAME,
       },
       (proc, containerName) =>

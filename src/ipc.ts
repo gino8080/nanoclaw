@@ -172,10 +172,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
                   const fileBuffer = Buffer.from(data.file_base64, 'base64');
-                  if (
-                    data.sender &&
-                    data.chatJid.startsWith('tg:')
-                  ) {
+                  if (data.sender && data.chatJid.startsWith('tg:')) {
                     await sendPoolDocument(
                       data.chatJid,
                       fileBuffer,
