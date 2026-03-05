@@ -16,7 +16,13 @@
     "setup": "tsx setup/index.ts",
     "auth": "tsx src/whatsapp-auth.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "logs": "bash scripts/logs.sh",
+    "logs:status": "bash scripts/logs.sh status",
+    "logs:host": "bash scripts/logs.sh host",
+    "logs:agents": "bash scripts/logs.sh agents",
+    "logs:pool": "bash scripts/logs.sh pool",
+    "logs:errors": "bash scripts/logs.sh errors"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",
