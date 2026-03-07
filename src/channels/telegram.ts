@@ -3,7 +3,12 @@ import path from 'path';
 
 import { Api, Bot, InputFile } from 'grammy';
 
-import { ASSISTANT_NAME, DATA_DIR, TRIGGER_PATTERN } from '../config.js';
+import {
+  ASSISTANT_NAME,
+  DATA_DIR,
+  PUBLIC_BASE_URL,
+  TRIGGER_PATTERN,
+} from '../config.js';
 import { markdownToTelegramHtml } from '../telegram-format.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
@@ -58,13 +63,42 @@ export class TelegramChannel implements Channel {
       ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
 
+    // Link to file browser
+    this.bot.command('files', (ctx) => {
+      ctx.reply(`📂 <a href="${PUBLIC_BASE_URL}/files/">File Browser</a>`, {
+        parse_mode: 'HTML',
+      });
+    });
+
+    // Help — list available commands
+    this.bot.command('help', (ctx) => {
+      const lines = [
+        `<b>${ASSISTANT_NAME} — Comandi</b>`,
+        '',
+        '/ping — Controlla se il bot è online',
+        '/files — Apri il file browser',
+        '/chatid — Mostra il Chat ID',
+        '/reset — Reset sessione (nuova conversazione)',
+        '/status — Stato del sistema',
+        '/restart — Riavvia NanoClaw',
+        '/help — Mostra questo messaggio',
+      ];
+      ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+    });
+
     // Admin commands (only work in registered groups)
     if (this.opts.adminCommands) {
       const admin = this.opts.adminCommands;
 
       this.bot.command('reset', (ctx) => {
         const chatJid = `tg:${ctx.chat.id}`;
-        const group = this.opts.registeredGroups()[chatJid];
+        const groups = this.opts.registeredGroups();
+        // In private chats, fall back to main group
+        const group =
+          groups[chatJid] ||
+          (ctx.chat.type === 'private'
+            ? Object.values(groups).find((g) => g.isMain)
+            : undefined);
         if (!group) {
           ctx.reply('⚠️ This chat is not a registered group.');
           return;
@@ -341,6 +375,24 @@ export class TelegramChannel implements Channel {
     });
     this.bot.on('message:location', (ctx) => storeNonText(ctx, '[Location]'));
     this.bot.on('message:contact', (ctx) => storeNonText(ctx, '[Contact]'));
+
+    // Register bot commands menu
+    const commands = [
+      { command: 'help', description: 'Mostra i comandi disponibili' },
+      { command: 'ping', description: 'Controlla se il bot è online' },
+      { command: 'files', description: 'Apri il file browser' },
+      { command: 'chatid', description: 'Mostra il Chat ID di questa chat' },
+    ];
+    if (this.opts.adminCommands) {
+      commands.push(
+        { command: 'reset', description: 'Reset sessione (nuova conversazione)' },
+        { command: 'status', description: 'Stato del sistema' },
+        { command: 'restart', description: 'Riavvia NanoClaw' },
+      );
+    }
+    this.bot.api.setMyCommands(commands).catch((err) => {
+      logger.warn({ err }, 'Failed to set bot commands menu');
+    });
 
     // Handle errors gracefully
     this.bot.catch((err) => {

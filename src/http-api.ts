@@ -206,10 +206,7 @@ const NAV_STYLES = `
  * Serve an interactive HTML directory listing for NANO_CLAW_DATA.
  * Image-heavy directories get a grid view; others get a table.
  */
-function serveDirectoryListing(
-  res: ServerResponse,
-  urlPath: string,
-): boolean {
+function serveDirectoryListing(res: ServerResponse, urlPath: string): boolean {
   const dirPath = urlPath.replace(/^\/files\/?/, '').replace(/\/+$/, '');
   const resolved = path.resolve(STATIC_ROOT, dirPath);
 
