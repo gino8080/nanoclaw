@@ -221,6 +221,20 @@ function generateCodeChallenge(verifier: string): string {
   return crypto.createHash('sha256').update(verifier).digest('base64url');
 }
 
+// ── Token expiry check ──
+
+export function isTokenExpiringSoon(bufferMs = 10 * 60 * 1000): boolean {
+  try {
+    if (!fs.existsSync(TOKEN_CACHE_PATH)) return true;
+    const data: TokenCache = JSON.parse(
+      fs.readFileSync(TOKEN_CACHE_PATH, 'utf-8'),
+    );
+    return data.expiresAt <= Date.now() + bufferMs;
+  } catch {
+    return true;
+  }
+}
+
 // ── Public API ──
 
 /**
@@ -321,13 +335,16 @@ export function startOAuthFlow(
 
   const promise = new Promise<{ success: boolean; message: string }>(
     (resolve) => {
-      const timeout = setTimeout(() => {
-        pendingOAuth = null;
-        resolve({
-          success: false,
-          message: 'Login scaduto (5 min). Riprova con /login.',
-        });
-      }, 5 * 60 * 1000);
+      const timeout = setTimeout(
+        () => {
+          pendingOAuth = null;
+          resolve({
+            success: false,
+            message: 'Login scaduto (5 min). Riprova con /login.',
+          });
+        },
+        5 * 60 * 1000,
+      );
 
       pendingOAuth = { codeVerifier, state, chatJid, resolve, timeout };
     },
@@ -348,7 +365,9 @@ export async function handleOAuthCallback(
 ): Promise<{ html: string; chatJid: string | null }> {
   if (!pendingOAuth || pendingOAuth.state !== state) {
     return {
-      html: errorPage('Login non valido o scaduto. Riprova /login su Telegram.'),
+      html: errorPage(
+        'Login non valido o scaduto. Riprova /login su Telegram.',
+      ),
       chatJid: null,
     };
   }
@@ -358,7 +377,11 @@ export async function handleOAuthCallback(
   clearTimeout(timeout);
 
   const redirectUri = `${publicBaseUrl}/oauth/callback`;
-  const credentials = await exchangeCodeForToken(code, codeVerifier, redirectUri);
+  const credentials = await exchangeCodeForToken(
+    code,
+    codeVerifier,
+    redirectUri,
+  );
 
   if (!credentials) {
     resolve({
@@ -366,7 +389,9 @@ export async function handleOAuthCallback(
       message: 'Scambio codice fallito. Riprova /login.',
     });
     return {
-      html: errorPage('Errore nello scambio del codice. Riprova /login su Telegram.'),
+      html: errorPage(
+        'Errore nello scambio del codice. Riprova /login su Telegram.',
+      ),
       chatJid,
     };
   }
@@ -390,9 +415,7 @@ export async function handleOAuthCallback(
   };
   writeKeychain(keychainData);
 
-  const minutes = Math.round(
-    (credentials.expiresAt - Date.now()) / 1000 / 60,
-  );
+  const minutes = Math.round((credentials.expiresAt - Date.now()) / 1000 / 60);
   resolve({
     success: true,
     message: `Login completato! Token valido per ${minutes} min.`,

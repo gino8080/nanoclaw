@@ -12,10 +12,7 @@ import {
 import { markdownToTelegramHtml } from '../telegram-format.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
-import {
-  refreshAndCacheToken,
-  startOAuthFlow,
-} from '../oauth-keychain.js';
+import { refreshAndCacheToken, startOAuthFlow } from '../oauth-keychain.js';
 import { transcribeAudio } from '../transcription.js';
 import { registerChannel, ChannelOpts, AdminCommands } from './registry.js';
 import {
