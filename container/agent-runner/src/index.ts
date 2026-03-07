@@ -444,6 +444,7 @@ async function runQuery(
         'mcp__gmail__read_email',
         'mcp__gmail__list_email_labels',
         'mcp__gmail__download_attachment',
+        'mcp__googlemaps__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -464,6 +465,15 @@ async function runQuery(
             ...(sdkEnv.IMAGE_WEBHOOK_URL ? { IMAGE_WEBHOOK_URL: sdkEnv.IMAGE_WEBHOOK_URL } : {}),
           },
         },
+        ...(sdkEnv.GOOGLE_MAPS_API_KEY ? {
+          googlemaps: {
+            command: 'node',
+            args: [path.join(path.dirname(mcpServerPath), 'googlemaps-mcp.js')],
+            env: {
+              GOOGLE_MAPS_API_KEY: sdkEnv.GOOGLE_MAPS_API_KEY,
+            },
+          },
+        } : {}),
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],

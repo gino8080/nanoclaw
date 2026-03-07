@@ -237,6 +237,7 @@ function readSecrets(): Record<string, string> {
     'ANTHROPIC_BASE_URL',
     'ANTHROPIC_AUTH_TOKEN',
     'IMAGE_WEBHOOK_URL',
+    'GOOGLE_MAPS_API_KEY',
   ]);
 }
 

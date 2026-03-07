@@ -385,7 +385,10 @@ export class TelegramChannel implements Channel {
     ];
     if (this.opts.adminCommands) {
       commands.push(
-        { command: 'reset', description: 'Reset sessione (nuova conversazione)' },
+        {
+          command: 'reset',
+          description: 'Reset sessione (nuova conversazione)',
+        },
         { command: 'status', description: 'Stato del sistema' },
         { command: 'restart', description: 'Riavvia NanoClaw' },
       );
