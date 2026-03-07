@@ -12,6 +12,10 @@ import {
 import { markdownToTelegramHtml } from '../telegram-format.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
+import {
+  refreshAndCacheToken,
+  startOAuthFlow,
+} from '../oauth-keychain.js';
 import { transcribeAudio } from '../transcription.js';
 import { registerChannel, ChannelOpts, AdminCommands } from './registry.js';
 import {
@@ -81,6 +85,7 @@ export class TelegramChannel implements Channel {
         '/reset — Reset sessione (nuova conversazione)',
         '/status — Stato del sistema',
         '/restart — Riavvia NanoClaw',
+        '/login — Refresh token OAuth Claude',
         '/help — Mostra questo messaggio',
       ];
       ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
@@ -114,6 +119,47 @@ export class TelegramChannel implements Channel {
       this.bot.command('restart', (ctx) => {
         ctx.reply('♻️ Restarting NanoClaw...');
         setTimeout(() => admin.restart(), 500);
+      });
+
+      this.bot.command('login', async (ctx) => {
+        const chatJid = `tg:${ctx.chat.id}`;
+
+        // Step 1: try refresh
+        ctx.reply('🔑 Refresh token OAuth in corso...');
+        try {
+          const result = await refreshAndCacheToken();
+          if (result.success) {
+            ctx.reply(`✅ ${result.message}`);
+            return;
+          }
+          // Refresh failed — fall through to full OAuth
+          ctx.reply(`⚠️ ${result.message}\n\nAvvio login OAuth completo...`);
+        } catch (err) {
+          logger.error({ err }, 'OAuth refresh via /login failed');
+          ctx.reply('⚠️ Refresh fallito. Avvio login OAuth completo...');
+        }
+
+        // Step 2: full OAuth PKCE flow
+        try {
+          const { authorizeUrl, promise } = startOAuthFlow(
+            PUBLIC_BASE_URL,
+            chatJid,
+          );
+          await ctx.reply(
+            `🔗 Apri questo link per autenticarti:\n\n${authorizeUrl}\n\nHai 5 minuti.`,
+            { link_preview_options: { is_disabled: true } },
+          );
+
+          const oauthResult = await promise;
+          ctx.reply(
+            oauthResult.success
+              ? `✅ ${oauthResult.message}`
+              : `❌ ${oauthResult.message}`,
+          );
+        } catch (err) {
+          logger.error({ err }, 'Full OAuth flow via /login failed');
+          ctx.reply('❌ Errore durante il login OAuth.');
+        }
       });
     }
 
@@ -391,6 +437,7 @@ export class TelegramChannel implements Channel {
         },
         { command: 'status', description: 'Stato del sistema' },
         { command: 'restart', description: 'Riavvia NanoClaw' },
+        { command: 'login', description: 'Refresh token OAuth Claude' },
       );
     }
     this.bot.api.setMyCommands(commands).catch((err) => {

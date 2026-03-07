@@ -372,6 +372,25 @@ async function runAgent(
         { group: group.name, error: output.error },
         'Container agent error',
       );
+
+      // Detect auth errors and notify user
+      const errStr = (output.error || '') + (output.result || '');
+      if (
+        errStr.includes('authentication_error') ||
+        errStr.includes('Invalid bearer token') ||
+        errStr.includes('Failed to authenticate')
+      ) {
+        const mainChannel = channels.find(
+          (c) => c.ownsJid(chatJid) && c.isConnected(),
+        );
+        mainChannel
+          ?.sendMessage(
+            chatJid,
+            '⚠️ Token OAuth scaduto. Usa /login per rigenerarlo.',
+          )
+          .catch(() => {});
+      }
+
       return 'error';
     }
 

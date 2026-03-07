@@ -27,6 +27,7 @@ import path from 'path';
 
 import { ContainerOutput } from './container-runner.js';
 import { logger } from './logger.js';
+import { handleOAuthCallback } from './oauth-keychain.js';
 import { formatMessages, stripInternalTags } from './router.js';
 import { RegisteredGroup } from './types.js';
 
@@ -442,6 +443,35 @@ export function startHttpApi(deps: HttpApiDeps): void {
         return;
       }
 
+      // OAuth callback: GET /oauth/callback?code=...&state=...
+      if (req.method === 'GET' && req.url?.startsWith('/oauth/callback')) {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const code = url.searchParams.get('code');
+        const state = url.searchParams.get('state');
+
+        if (!code || !state) {
+          res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end('<h1>Missing code or state parameter</h1>');
+          return;
+        }
+
+        const publicBaseUrl =
+          process.env.PUBLIC_BASE_URL ?? 'https://mini4.tailef26dc.ts.net';
+        const result = await handleOAuthCallback(code, state, publicBaseUrl);
+
+        // Notify user on Telegram if we have a chatJid and a sendMessage function
+        if (result.chatJid && deps.sendMessage) {
+          const msg = result.html.includes('completato')
+            ? '✅ Login completato! Il bot è pronto.'
+            : '❌ Login fallito. Riprova /login.';
+          deps.sendMessage(result.chatJid, msg).catch(() => {});
+        }
+
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(result.html);
+        return;
+      }
+
       // Bearer token auth (required when HTTP_API_TOKEN is set)
       if (API_TOKEN) {
         const auth = req.headers['authorization'];
@@ -487,7 +517,7 @@ export function startHttpApi(deps: HttpApiDeps): void {
         json(res, 503, { error: 'No main group registered in NanoClaw' });
         return;
       }
-      const [mainJid, group] = mainEntry;
+      const [, group] = mainEntry;
 
       // Use a synthetic JID so the queue doesn't conflict with the real
       // Telegram group. Each HTTP request gets its own unique JID.
