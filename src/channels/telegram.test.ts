@@ -24,6 +24,12 @@ vi.mock('../logger.js', () => ({
   },
 }));
 
+// Mock transcription
+const mockTranscribeAudio = vi.fn<(buffer: Buffer) => Promise<string | null>>();
+vi.mock('../transcription.js', () => ({
+  transcribeAudio: (buffer: Buffer) => mockTranscribeAudio(buffer),
+}));
+
 // --- Grammy mock ---
 
 type Handler = (...args: any[]) => any;
@@ -40,6 +46,7 @@ vi.mock('grammy', () => ({
     api = {
       sendMessage: vi.fn().mockResolvedValue(undefined),
       sendChatAction: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn().mockResolvedValue({ file_path: 'voice/file_0.oga' }),
     };
 
     constructor(token: string) {
@@ -583,17 +590,80 @@ describe('TelegramChannel', () => {
       );
     });
 
-    it('stores voice message with placeholder', async () => {
+    it('transcribes voice message successfully', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
-      const ctx = createMediaCtx({});
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(100)),
+        }),
+      );
+      mockTranscribeAudio.mockResolvedValue('Hello world');
+
+      const ctx = createMediaCtx({
+        extra: { voice: { file_id: 'voice123' } },
+      });
+      (ctx as any).api = currentBot().api;
       await triggerMediaMessage('message:voice', ctx);
 
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
-        expect.objectContaining({ content: '[Voice message]' }),
+        expect.objectContaining({ content: '[Voice: Hello world]' }),
+      );
+      vi.unstubAllGlobals();
+    });
+
+    it('falls back when transcription returns null', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(100)),
+        }),
+      );
+      mockTranscribeAudio.mockResolvedValue(null);
+
+      const ctx = createMediaCtx({
+        extra: { voice: { file_id: 'voice123' } },
+      });
+      (ctx as any).api = currentBot().api;
+      await triggerMediaMessage('message:voice', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '[Voice message - transcription unavailable]',
+        }),
+      );
+      vi.unstubAllGlobals();
+    });
+
+    it('handles voice download failure', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      currentBot().api.getFile.mockRejectedValueOnce(
+        new Error('File too large'),
+      );
+
+      const ctx = createMediaCtx({
+        extra: { voice: { file_id: 'voice123' } },
+      });
+      (ctx as any).api = currentBot().api;
+      await triggerMediaMessage('message:voice', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '[Voice message - download failed]',
+        }),
       );
     });
 
