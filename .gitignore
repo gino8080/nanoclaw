@@ -26,6 +26,7 @@ groups/telegram_swarm/*
 
 # Secrets
 *.keys.json
+*.apps.googleusercontent.com.json
 .env
 
 # Temp files
