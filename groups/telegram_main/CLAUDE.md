@@ -36,6 +36,8 @@ To modify a user's photo:
 
 Files are stored in `/workspace/extra/NANO_CLAW_DATA/` (persistent across sessions).
 
+⚠️ When sharing files via web link, follow the rules in `/workspace/global/CLAUDE.md` exactly. URLs are `$PUBLIC_BASE_URL/files/{subfolder}/{filename}` where `{subfolder}` is `pages/`, `images/`, etc. NEVER use `main`, `group`, or `public` in the URL.
+
 ## Main Channel
 
 This is the **main channel** (Telegram), which has elevated privileges.

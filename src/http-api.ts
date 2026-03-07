@@ -22,6 +22,7 @@
 
 import fs from 'fs';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
+import { marked } from 'marked';
 import path from 'path';
 
 import { ContainerOutput } from './container-runner.js';
@@ -81,6 +82,60 @@ function serveStaticFile(res: ServerResponse, urlPath: string): boolean {
   }
 
   const ext = path.extname(resolved).toLowerCase();
+
+  // Render markdown files as HTML
+  if (ext === '.md') {
+    const raw = fs.readFileSync(resolved, 'utf8');
+    const rendered = marked(raw) as string;
+    const fileName = path.basename(resolved);
+    const mdFilePath = urlPath.replace(/^\/files\/?/, '');
+    const mdSection = mdFilePath.split('/')[0] || '';
+    const nav = buildNavHeader(mdSection);
+    const html = `<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${fileName}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 20px; max-width: 800px; margin: 0 auto; line-height: 1.6; }
+  ${NAV_STYLES}
+  h1, h2, h3, h4 { color: #f0f0f0; margin: 1.2em 0 0.5em; }
+  h1 { font-size: 1.6em; border-bottom: 1px solid #222; padding-bottom: 8px; }
+  h2 { font-size: 1.3em; }
+  h3 { font-size: 1.1em; }
+  p { margin: 0.6em 0; }
+  a { color: #6ba3f7; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: #1a1a1a; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+  pre { background: #1a1a1a; padding: 14px; border-radius: 6px; overflow-x: auto; margin: 1em 0; }
+  pre code { background: none; padding: 0; }
+  blockquote { border-left: 3px solid #333; padding-left: 12px; color: #999; margin: 1em 0; }
+  ul, ol { padding-left: 1.5em; margin: 0.6em 0; }
+  li { margin: 0.3em 0; }
+  table { width: 100%; border-collapse: collapse; margin: 1em 0; }
+  th, td { padding: 8px 12px; border: 1px solid #222; text-align: left; }
+  th { background: #111; color: #aaa; font-weight: 500; }
+  img { max-width: 100%; border-radius: 6px; }
+  hr { border: none; border-top: 1px solid #222; margin: 1.5em 0; }
+</style>
+</head>
+<body>
+${nav}
+<article>${rendered}</article>
+</body>
+</html>`;
+    const content = Buffer.from(html, 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Length': content.length,
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(content);
+    return true;
+  }
+
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
   const content = fs.readFileSync(resolved);
@@ -90,6 +145,221 @@ function serveStaticFile(res: ServerResponse, urlPath: string): boolean {
     'Access-Control-Allow-Origin': '*',
     'Content-Security-Policy':
       "default-src 'self' 'unsafe-inline' https: data:; script-src 'self' 'unsafe-inline' https://maps.googleapis.com https://maps.gstatic.com https://unpkg.com https://cdn.jsdelivr.net; frame-src https://www.google.com https://maps.google.com",
+  });
+  res.end(content);
+  return true;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg']);
+
+const SECTION_ICONS: Record<string, string> = {
+  images: '🖼️',
+  pages: '📄',
+  ricerche: '🔬',
+  report_giornalieri: '📊',
+  lists: '📋',
+  note: '📝',
+};
+
+/** Build the top nav bar with links to all root-level sections. */
+function buildNavHeader(activeSection: string): string {
+  let sections: string[];
+  try {
+    sections = fs
+      .readdirSync(STATIC_ROOT)
+      .filter(
+        (n) =>
+          !n.startsWith('.') &&
+          fs.statSync(path.join(STATIC_ROOT, n)).isDirectory(),
+      )
+      .sort();
+  } catch {
+    sections = [];
+  }
+
+  const links = sections
+    .map((name) => {
+      const icon = SECTION_ICONS[name] || '📁';
+      const isActive = name === activeSection;
+      const cls = isActive ? ' class="active"' : '';
+      return `<a href="/files/${name}/"${cls}>${icon} ${name}</a>`;
+    })
+    .join('');
+
+  return `<nav><a href="/files/" class="${!activeSection ? 'active' : ''}">🏠 home</a>${links}</nav>`;
+}
+
+const NAV_STYLES = `
+  nav { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid #1a1a1a; }
+  nav a { padding: 6px 12px; border-radius: 6px; background: #141414; color: #999; font-size: 0.85em; text-decoration: none; transition: background 0.15s; }
+  nav a:hover { background: #1e1e1e; color: #e0e0e0; }
+  nav a.active { background: #1a2a3a; color: #6ba3f7; }
+`;
+
+/**
+ * Serve an interactive HTML directory listing for NANO_CLAW_DATA.
+ * Image-heavy directories get a grid view; others get a table.
+ */
+function serveDirectoryListing(
+  res: ServerResponse,
+  urlPath: string,
+): boolean {
+  const dirPath = urlPath.replace(/^\/files\/?/, '').replace(/\/+$/, '');
+  const resolved = path.resolve(STATIC_ROOT, dirPath);
+
+  // Path traversal protection
+  const relative = path.relative(STATIC_ROOT, resolved);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    json(res, 403, { error: 'Forbidden' });
+    return true;
+  }
+
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+    return false;
+  }
+
+  // Collect entries
+  interface DirEntry {
+    name: string;
+    isDir: boolean;
+    size: number;
+    modified: Date;
+    ext: string;
+    entryPath: string;
+  }
+  const entries: DirEntry[] = [];
+  for (const name of fs.readdirSync(resolved).sort()) {
+    if (name.startsWith('.')) continue;
+    const fullPath = path.join(resolved, name);
+    const stat = fs.statSync(fullPath);
+    entries.push({
+      name,
+      isDir: stat.isDirectory(),
+      size: stat.size,
+      modified: stat.mtime,
+      ext: path.extname(name).toLowerCase(),
+      entryPath: dirPath ? `${dirPath}/${name}` : name,
+    });
+  }
+
+  const activeSection = dirPath.split('/')[0] || '';
+  const nav = buildNavHeader(activeSection);
+  const displayPath = dirPath ? `/${dirPath}` : '/';
+
+  // Detect image-heavy directory
+  const files = entries.filter((e) => !e.isDir);
+  const imageFiles = files.filter((e) => IMAGE_EXTS.has(e.ext));
+  const isImageDir = files.length > 0 && imageFiles.length / files.length > 0.5;
+
+  let body: string;
+
+  if (isImageDir) {
+    // Grid view for images
+    const parentLink = dirPath
+      ? `<a href="${dirPath.includes('/') ? `/files/${dirPath.substring(0, dirPath.lastIndexOf('/'))}/` : '/files/'}" class="back-link">← indietro</a>`
+      : '';
+
+    const cards = entries
+      .map((e) => {
+        if (e.isDir) {
+          return `<a href="/files/${e.entryPath}/" class="card card-dir"><div class="card-icon">📁</div><div class="card-name">${e.name}/</div></a>`;
+        }
+        if (IMAGE_EXTS.has(e.ext)) {
+          return `<a href="/files/${e.entryPath}" class="card card-img"><img src="/files/${e.entryPath}" alt="${e.name}" loading="lazy"><div class="card-name">${e.name}</div></a>`;
+        }
+        return `<a href="/files/${e.entryPath}" class="card card-file"><div class="card-icon">📄</div><div class="card-name">${e.name}</div></a>`;
+      })
+      .join('\n');
+
+    body = `${parentLink}<div class="grid">${cards}</div>`;
+  } else {
+    // Table view
+    const rows: string[] = [];
+    if (dirPath) {
+      const parent = dirPath.includes('/')
+        ? `/files/${dirPath.substring(0, dirPath.lastIndexOf('/'))}/`
+        : '/files/';
+      rows.push(
+        `<tr><td>📁</td><td><a href="${parent}">..</a></td><td></td><td></td></tr>`,
+      );
+    }
+    for (const e of entries) {
+      if (e.isDir) {
+        rows.push(
+          `<tr><td>📁</td><td><a href="/files/${e.entryPath}/">${e.name}/</a></td><td>—</td><td>—</td></tr>`,
+        );
+      } else {
+        const modified = e.modified.toLocaleDateString('it-IT', {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        rows.push(
+          `<tr><td>📄</td><td><a href="/files/${e.entryPath}">${e.name}</a></td><td>${formatFileSize(e.size)}</td><td>${modified}</td></tr>`,
+        );
+      }
+    }
+    body = `<table>
+<thead><tr><th></th><th>Nome</th><th>Dim.</th><th>Modificato</th></tr></thead>
+<tbody>${rows.join('\n')}</tbody>
+</table>`;
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Files — ${displayPath}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 20px; }
+  ${NAV_STYLES}
+  h1 { font-size: 1.2em; color: #888; margin-bottom: 16px; font-weight: 400; }
+  h1 span { color: #e0e0e0; }
+  a { color: #6ba3f7; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  /* Table view */
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: #666; font-weight: 500; font-size: 0.85em; text-transform: uppercase; padding: 8px 12px; border-bottom: 1px solid #222; }
+  td { padding: 10px 12px; border-bottom: 1px solid #1a1a1a; }
+  tr:hover { background: #111; }
+  td:first-child { width: 30px; text-align: center; }
+  td:nth-child(3), td:nth-child(4), th:nth-child(3), th:nth-child(4) { color: #666; font-size: 0.9em; }
+  @media (max-width: 600px) { td:nth-child(4), th:nth-child(4) { display: none; } }
+  /* Grid view */
+  .back-link { display: inline-block; margin-bottom: 12px; color: #666; font-size: 0.9em; }
+  .back-link:hover { color: #6ba3f7; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  .card { display: flex; flex-direction: column; background: #111; border-radius: 8px; overflow: hidden; text-decoration: none !important; transition: transform 0.15s, background 0.15s; }
+  .card:hover { transform: translateY(-2px); background: #1a1a1a; }
+  .card-img img { width: 100%; aspect-ratio: 1; object-fit: cover; }
+  .card-dir, .card-file { aspect-ratio: 1; align-items: center; justify-content: center; }
+  .card-icon { font-size: 2.5em; }
+  .card-name { padding: 8px; font-size: 0.8em; color: #aaa; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 600px) { .grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; } }
+</style>
+</head>
+<body>
+${nav}
+<h1>📂 <span>${displayPath}</span></h1>
+${body}
+</body>
+</html>`;
+
+  const content = Buffer.from(html, 'utf8');
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': content.length,
+    'Access-Control-Allow-Origin': '*',
   });
   res.end(content);
   return true;
@@ -164,9 +434,12 @@ export function startHttpApi(deps: HttpApiDeps): void {
         return;
       }
 
-      // Static file serving: GET /files/subdir/filename.ext
-      if (req.method === 'GET' && req.url?.startsWith('/files/')) {
+      // Static file serving & directory listing: GET /files/...
+      if (req.method === 'GET' && req.url?.startsWith('/files')) {
         const urlPath = decodeURIComponent(req.url.split('?')[0]);
+        // Try directory listing first (for paths ending with / or exact /files)
+        if (serveDirectoryListing(res, urlPath)) return;
+        // Then try serving as file
         if (serveStaticFile(res, urlPath)) return;
         json(res, 404, { error: 'File not found' });
         return;

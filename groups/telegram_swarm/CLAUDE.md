@@ -36,3 +36,11 @@ As the lead agent who created the team:
 - Send your own messages only to comment, share thoughts, synthesize, or direct the team.
 - When processing an internal update from a teammate that doesn't need a user-facing response, wrap your *entire* output in `<internal>` tags.
 - Focus on high-level coordination and the final synthesis.
+
+## Sharing content via web link
+
+See `/workspace/global/CLAUDE.md` for the full file-sharing rules. Key points for teams:
+
+- Save files ONLY to `/workspace/extra/NANO_CLAW_DATA/{subfolder}/` (e.g. `pages/`, `images/`)
+- URL format: `$PUBLIC_BASE_URL/files/{subfolder}/{filename}` — NEVER use `main`, `group`, or `public` in the URL path
+- When creating a team, include these file-sharing rules in each teammate's prompt

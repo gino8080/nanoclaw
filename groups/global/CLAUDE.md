@@ -49,19 +49,38 @@ When you learn something important:
 
 ## Sharing content via web link
 
-All files saved in `NANO_CLAW_DATA/` are accessible via web at `$PUBLIC_BASE_URL/files/{path}` (read `$PUBLIC_BASE_URL` from environment). The URL path mirrors the filesystem path inside NANO_CLAW_DATA.
+*Prefer sharing a link* over pasting long content in chat. Use links for HTML pages, markdown, images, PDFs, or any file.
 
-*Prefer sharing a link* over pasting long content in chat. Use links for:
-- HTML pages (itineraries, dashboards, reports with formatting/maps/charts)
-- Markdown reports and research documents
-- Generated images
-- PDFs or any other file
+### CRITICAL: How to save and share files
 
-How to:
-1. Save the file to the appropriate subfolder in `/workspace/extra/NANO_CLAW_DATA/` (e.g. `pages/`, `report_giornalieri/`, `ricerche/`, `images/`)
-2. Use a descriptive filename with a random suffix to avoid collisions, e.g. `itinerario-roma-a3f8.html`
-3. Share the link: `$PUBLIC_BASE_URL/files/{subfolder}/{filename}`
-4. Add a short summary in chat alongside the link
+The ONLY correct way to share a file via web link:
+
+1. Save the file inside `/workspace/extra/NANO_CLAW_DATA/` using one of these subfolders:
+   - `pages/` — HTML pages, itineraries, dashboards
+   - `report_giornalieri/` — daily reports
+   - `ricerche/` — research documents
+   - `images/` — generated images
+   - `note/` — notes
+2. Use a descriptive filename with a random suffix: `itinerario-roma-a3f8.html`
+3. Build the URL: read `$PUBLIC_BASE_URL` from env, then append `/files/{subfolder}/{filename}`
+
+Example (correct):
+```
+# Save file
+/workspace/extra/NANO_CLAW_DATA/pages/my-report-x7k2.html
+# Share URL
+$PUBLIC_BASE_URL/files/pages/my-report-x7k2.html
+```
+
+⚠️ WRONG patterns — NEVER do these:
+- `/files/main/...` ← WRONG (no "main" in URL)
+- `/files/group/...` ← WRONG (no "group" in URL)
+- `/files/public/...` ← WRONG (no "public" in URL)
+- Saving to `/workspace/group/` ← WRONG (not served by HTTP)
+
+The URL path MUST match the subfolder inside NANO_CLAW_DATA exactly. Nothing else.
+
+### HTML pages
 
 When the content benefits from rich formatting (maps, charts, interactive elements), generate an HTML page:
 - Self-contained (inline CSS/JS, or CDN links like Leaflet.js, Chart.js)
