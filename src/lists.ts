@@ -210,7 +210,11 @@ function processShoppingOp(
       };
       store.shopping.push(item);
       writeLists(store);
-      return { success: true, message: 'Shopping item added', item_id: item.id };
+      return {
+        success: true,
+        message: 'Shopping item added',
+        item_id: item.id,
+      };
     }
     case 'update': {
       const idx = store.shopping.findIndex((s) => s.id === op.item_id);
@@ -309,7 +313,11 @@ function processPurchasesOp(
       const data = JSON.parse(op.item_data || '{}');
       Object.assign(store.purchases[idx], data);
       writeLists(store);
-      return { success: true, message: 'Purchase updated', item_id: op.item_id };
+      return {
+        success: true,
+        message: 'Purchase updated',
+        item_id: op.item_id,
+      };
     }
     case 'remove': {
       const idx = store.purchases.findIndex((p) => p.id === op.item_id);
@@ -317,7 +325,11 @@ function processPurchasesOp(
         return { success: false, message: `Purchase not found: ${op.item_id}` };
       store.purchases.splice(idx, 1);
       writeLists(store);
-      return { success: true, message: 'Purchase removed', item_id: op.item_id };
+      return {
+        success: true,
+        message: 'Purchase removed',
+        item_id: op.item_id,
+      };
     }
     case 'mark_bought': {
       const idx = store.purchases.findIndex((p) => p.id === op.item_id);
@@ -326,7 +338,11 @@ function processPurchasesOp(
       store.purchases[idx].status = 'bought';
       store.purchases[idx].last_bought_at = now;
       writeLists(store);
-      return { success: true, message: 'Marked as bought', item_id: op.item_id };
+      return {
+        success: true,
+        message: 'Marked as bought',
+        item_id: op.item_id,
+      };
     }
     case 'unmark_bought': {
       const idx = store.purchases.findIndex((p) => p.id === op.item_id);
@@ -334,7 +350,11 @@ function processPurchasesOp(
         return { success: false, message: `Purchase not found: ${op.item_id}` };
       store.purchases[idx].status = 'to_buy';
       writeLists(store);
-      return { success: true, message: 'Marked as to_buy', item_id: op.item_id };
+      return {
+        success: true,
+        message: 'Marked as to_buy',
+        item_id: op.item_id,
+      };
     }
     default:
       return {

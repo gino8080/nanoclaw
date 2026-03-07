@@ -4,6 +4,7 @@ import path from 'path';
 import { Api, Bot, InputFile } from 'grammy';
 
 import { ASSISTANT_NAME, DATA_DIR, TRIGGER_PATTERN } from '../config.js';
+import { markdownToTelegramHtml } from '../telegram-format.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts, AdminCommands } from './registry.js';
@@ -321,14 +322,18 @@ export class TelegramChannel implements Channel {
       const numericId = jid.replace(/^tg:/, '');
 
       // Telegram has a 4096 character limit per message — split if needed
+      const html = markdownToTelegramHtml(text);
       const MAX_LENGTH = 4096;
-      if (text.length <= MAX_LENGTH) {
-        await this.bot.api.sendMessage(numericId, text);
+      if (html.length <= MAX_LENGTH) {
+        await this.bot.api.sendMessage(numericId, html, {
+          parse_mode: 'HTML',
+        });
       } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
+        for (let i = 0; i < html.length; i += MAX_LENGTH) {
           await this.bot.api.sendMessage(
             numericId,
-            text.slice(i, i + MAX_LENGTH),
+            html.slice(i, i + MAX_LENGTH),
+            { parse_mode: 'HTML' },
           );
         }
       }
@@ -477,12 +482,15 @@ export async function sendPoolMessage(
   const api = poolApis[idx];
   try {
     const numericId = chatId.replace(/^tg:/, '');
+    const html = markdownToTelegramHtml(text);
     const MAX_LENGTH = 4096;
-    if (text.length <= MAX_LENGTH) {
-      await api.sendMessage(numericId, text);
+    if (html.length <= MAX_LENGTH) {
+      await api.sendMessage(numericId, html, { parse_mode: 'HTML' });
     } else {
-      for (let i = 0; i < text.length; i += MAX_LENGTH) {
-        await api.sendMessage(numericId, text.slice(i, i + MAX_LENGTH));
+      for (let i = 0; i < html.length; i += MAX_LENGTH) {
+        await api.sendMessage(numericId, html.slice(i, i + MAX_LENGTH), {
+          parse_mode: 'HTML',
+        });
       }
     }
     logger.info(
