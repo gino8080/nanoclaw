@@ -52,10 +52,7 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
-import {
-  isTokenExpiringSoon,
-  refreshAndCacheToken,
-} from './oauth-keychain.js';
+import { isTokenExpiringSoon, refreshAndCacheToken } from './oauth-keychain.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -719,37 +716,43 @@ async function main(): Promise<void> {
   });
 
   // Proactive OAuth token refresh every 30 minutes
-  setInterval(async () => {
-    if (!isTokenExpiringSoon()) return;
-    try {
-      const result = await refreshAndCacheToken();
-      if (!result.success) {
-        logger.warn(
-          { message: result.message },
-          'Proactive OAuth refresh failed',
-        );
-        const mainEntry = Object.entries(registeredGroups).find(
-          ([, g]) => g.isMain,
-        );
-        if (mainEntry) {
-          const [mainJid] = mainEntry;
-          const channel = channels.find(
-            (c) => c.ownsJid(mainJid) && c.isConnected(),
+  setInterval(
+    async () => {
+      if (!isTokenExpiringSoon()) return;
+      try {
+        const result = await refreshAndCacheToken();
+        if (!result.success) {
+          logger.warn(
+            { message: result.message },
+            'Proactive OAuth refresh failed',
           );
-          channel
-            ?.sendMessage(
-              mainJid,
-              '⚠️ Token OAuth in scadenza. Usa /login per rinnovarlo.',
-            )
-            .catch(() => {});
+          const mainEntry = Object.entries(registeredGroups).find(
+            ([, g]) => g.isMain,
+          );
+          if (mainEntry) {
+            const [mainJid] = mainEntry;
+            const channel = channels.find(
+              (c) => c.ownsJid(mainJid) && c.isConnected(),
+            );
+            channel
+              ?.sendMessage(
+                mainJid,
+                '⚠️ Token OAuth in scadenza. Usa /login per rinnovarlo.',
+              )
+              .catch(() => {});
+          }
+        } else {
+          logger.info(
+            { message: result.message },
+            'Proactive OAuth refresh OK',
+          );
         }
-      } else {
-        logger.info({ message: result.message }, 'Proactive OAuth refresh OK');
+      } catch (err) {
+        logger.error({ err }, 'Proactive OAuth refresh error');
       }
-    } catch (err) {
-      logger.error({ err }, 'Proactive OAuth refresh error');
-    }
-  }, 30 * 60 * 1000);
+    },
+    30 * 60 * 1000,
+  );
 
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
