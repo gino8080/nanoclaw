@@ -486,6 +486,43 @@ export function logTaskRun(log: TaskRunLog): void {
   );
 }
 
+export function searchMessages(
+  query: string,
+  chatJid?: string,
+  channel?: string,
+  limit = 20,
+  senderName?: string,
+): NewMessage[] {
+  const conditions = [`content LIKE ?`];
+  const params: unknown[] = [`%${query}%`];
+
+  if (chatJid) {
+    conditions.push(`chat_jid = ?`);
+    params.push(chatJid);
+  }
+
+  if (channel) {
+    conditions.push(`chat_jid IN (SELECT jid FROM chats WHERE channel = ?)`);
+    params.push(channel);
+  }
+
+  if (senderName) {
+    conditions.push(`sender_name LIKE ?`);
+    params.push(`%${senderName}%`);
+  }
+
+  params.push(limit);
+
+  const sql = `
+    SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+    FROM messages
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY timestamp DESC
+    LIMIT ?
+  `;
+  return db.prepare(sql).all(...params) as NewMessage[];
+}
+
 // --- Router state accessors ---
 
 export function getRouterState(key: string): string | undefined {

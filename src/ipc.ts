@@ -10,7 +10,13 @@ import {
   sendPoolPhoto,
 } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import {
+  createTask,
+  deleteTask,
+  getTaskById,
+  searchMessages,
+  updateTask,
+} from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { processListOperation } from './lists.js';
 import { logger } from './logger.js';
@@ -292,6 +298,11 @@ export async function processTaskIpc(
     item_data?: string;
     item_id?: string;
     note_text?: string;
+    // For search_messages
+    query?: string;
+    limit?: number;
+    channel?: string;
+    senderName?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -540,6 +551,56 @@ export async function processTaskIpc(
           sourceGroup,
         },
         'List operation processed',
+      );
+      break;
+    }
+
+    case 'search_messages': {
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized search_messages attempt blocked',
+        );
+        break;
+      }
+      if (!data.requestId || !data.query) {
+        logger.warn({ data }, 'Invalid search_messages request');
+        break;
+      }
+      const searchResults = searchMessages(
+        data.query,
+        data.chatJid,
+        data.channel,
+        data.limit,
+        data.senderName,
+      );
+
+      const searchResponseDir = path.join(
+        DATA_DIR,
+        'ipc',
+        sourceGroup,
+        'search_responses',
+      );
+      fs.mkdirSync(searchResponseDir, { recursive: true });
+      const searchResponsePath = path.join(
+        searchResponseDir,
+        `${data.requestId}.json`,
+      );
+      const searchTmpPath = `${searchResponsePath}.tmp`;
+      fs.writeFileSync(
+        searchTmpPath,
+        JSON.stringify({ success: true, results: searchResults }),
+      );
+      fs.renameSync(searchTmpPath, searchResponsePath);
+
+      logger.info(
+        {
+          requestId: data.requestId,
+          query: data.query,
+          resultCount: searchResults.length,
+          sourceGroup,
+        },
+        'Search messages processed',
       );
       break;
     }

@@ -71,7 +71,13 @@ interface RegisterGroupArgs {
 }
 
 interface ManageListArgs {
-  action: 'add' | 'update' | 'remove' | 'mark_bought' | 'unmark_bought' | 'add_note';
+  action:
+    | 'add'
+    | 'update'
+    | 'remove'
+    | 'mark_bought'
+    | 'unmark_bought'
+    | 'add_note';
   list_type: 'todo' | 'shopping' | 'purchases' | 'ideas';
   item_data?: string;
   item_id?: string;
@@ -107,7 +113,12 @@ server.tool(
   "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times. Note: when running as a scheduled task, your final output is NOT sent to the user — use this tool if you need to communicate with the user or group.",
   {
     text: z.string().describe('The message text to send'),
-    sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
+    sender: z
+      .string()
+      .optional()
+      .describe(
+        'Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.',
+      ),
   },
   async (args: SendMessageArgs) => {
     const data: Record<string, string | undefined> = {
@@ -171,9 +182,7 @@ The image appears directly in the Telegram chat as a photo.`,
       });
 
       return {
-        content: [
-          { type: 'text' as const, text: 'Image sent to chat.' },
-        ],
+        content: [{ type: 'text' as const, text: 'Image sent to chat.' }],
       };
     } catch (err) {
       return {
@@ -271,7 +280,9 @@ Image config defaults: 1K resolution, 1:1 aspect ratio. Override with parameters
   {
     prompt: z
       .string()
-      .describe('Text prompt describing the image to generate or how to modify it'),
+      .describe(
+        'Text prompt describing the image to generate or how to modify it',
+      ),
     image_base64: z
       .string()
       .optional()
@@ -300,7 +311,9 @@ Image config defaults: 1K resolution, 1:1 aspect ratio. Override with parameters
     image_size: z
       .enum(['0.5K', '1K', '2K', '4K'])
       .optional()
-      .describe('Output resolution (default: 1K). 0.5K=low-res/fast, 4K=high-res.'),
+      .describe(
+        'Output resolution (default: 1K). 0.5K=low-res/fast, 4K=high-res.',
+      ),
     filename: z
       .string()
       .optional()
@@ -373,14 +386,13 @@ Image config defaults: 1K resolution, 1:1 aspect ratio. Override with parameters
       }
 
       // Save to /workspace/extra/ (mounted data directory) or fallback to /workspace/group/
-      const outName =
-        args.filename || `generated-${Date.now()}.png`;
+      const outName = args.filename || `generated-${Date.now()}.png`;
       const extraBase = '/workspace/extra';
       let outDir = '/workspace/group';
       if (fs.existsSync(extraBase)) {
-        const dirs = fs.readdirSync(extraBase).filter((d) =>
-          fs.statSync(path.join(extraBase, d)).isDirectory(),
-        );
+        const dirs = fs
+          .readdirSync(extraBase)
+          .filter((d) => fs.statSync(path.join(extraBase, d)).isDirectory());
         if (dirs.length > 0) {
           outDir = path.join(extraBase, dirs[0], 'images');
         }
@@ -403,7 +415,7 @@ Image config defaults: 1K resolution, 1:1 aspect ratio. Override with parameters
         content: [
           {
             type: 'text' as const,
-            text: `Image generated and sent to chat. Also saved to ${outPath} (${Math.round(result.image_base64.length * 0.75 / 1024)}KB).`,
+            text: `Image generated and sent to chat. Also saved to ${outPath} (${Math.round((result.image_base64.length * 0.75) / 1024)}KB).`,
           },
         ],
       };
@@ -445,11 +457,33 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
 \u2022 interval: Milliseconds between runs (e.g., "300000" for 5 minutes, "3600000" for 1 hour)
 \u2022 once: Local time WITHOUT "Z" suffix (e.g., "2026-02-01T15:30:00"). Do NOT use UTC/Z suffix.`,
   {
-    prompt: z.string().describe('What the agent should do when the task runs. For isolated mode, include all necessary context here.'),
-    schedule_type: z.enum(['cron', 'interval', 'once']).describe('cron=recurring at specific times, interval=recurring every N ms, once=run once at specific time'),
-    schedule_value: z.string().describe('cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)'),
-    context_mode: z.enum(['group', 'isolated']).default('group').describe('group=runs with chat history and memory, isolated=fresh session (include context in prompt)'),
-    target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
+    prompt: z
+      .string()
+      .describe(
+        'What the agent should do when the task runs. For isolated mode, include all necessary context here.',
+      ),
+    schedule_type: z
+      .enum(['cron', 'interval', 'once'])
+      .describe(
+        'cron=recurring at specific times, interval=recurring every N ms, once=run once at specific time',
+      ),
+    schedule_value: z
+      .string()
+      .describe(
+        'cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)',
+      ),
+    context_mode: z
+      .enum(['group', 'isolated'])
+      .default('group')
+      .describe(
+        'group=runs with chat history and memory, isolated=fresh session (include context in prompt)',
+      ),
+    target_group_jid: z
+      .string()
+      .optional()
+      .describe(
+        '(Main group only) JID of the group to schedule the task for. Defaults to the current group.',
+      ),
   },
   async (args: ScheduleTaskArgs) => {
     // Validate schedule_value before writing IPC
@@ -458,7 +492,12 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
         CronExpressionParser.parse(args.schedule_value);
       } catch {
         return {
-          content: [{ type: 'text' as const, text: `Invalid cron: "${args.schedule_value}". Use format like "0 9 * * *" (daily 9am) or "*/5 * * * *" (every 5 min).` }],
+          content: [
+            {
+              type: 'text' as const,
+              text: `Invalid cron: "${args.schedule_value}". Use format like "0 9 * * *" (daily 9am) or "*/5 * * * *" (every 5 min).`,
+            },
+          ],
           isError: true,
         };
       }
@@ -466,28 +505,47 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       const ms = parseInt(args.schedule_value, 10);
       if (isNaN(ms) || ms <= 0) {
         return {
-          content: [{ type: 'text' as const, text: `Invalid interval: "${args.schedule_value}". Must be positive milliseconds (e.g., "300000" for 5 min).` }],
+          content: [
+            {
+              type: 'text' as const,
+              text: `Invalid interval: "${args.schedule_value}". Must be positive milliseconds (e.g., "300000" for 5 min).`,
+            },
+          ],
           isError: true,
         };
       }
     } else if (args.schedule_type === 'once') {
-      if (/[Zz]$/.test(args.schedule_value) || /[+-]\d{2}:\d{2}$/.test(args.schedule_value)) {
+      if (
+        /[Zz]$/.test(args.schedule_value) ||
+        /[+-]\d{2}:\d{2}$/.test(args.schedule_value)
+      ) {
         return {
-          content: [{ type: 'text' as const, text: `Timestamp must be local time without timezone suffix. Got "${args.schedule_value}" — use format like "2026-02-01T15:30:00".` }],
+          content: [
+            {
+              type: 'text' as const,
+              text: `Timestamp must be local time without timezone suffix. Got "${args.schedule_value}" — use format like "2026-02-01T15:30:00".`,
+            },
+          ],
           isError: true,
         };
       }
       const date = new Date(args.schedule_value);
       if (isNaN(date.getTime())) {
         return {
-          content: [{ type: 'text' as const, text: `Invalid timestamp: "${args.schedule_value}". Use local time format like "2026-02-01T15:30:00".` }],
+          content: [
+            {
+              type: 'text' as const,
+              text: `Invalid timestamp: "${args.schedule_value}". Use local time format like "2026-02-01T15:30:00".`,
+            },
+          ],
           isError: true,
         };
       }
     }
 
     // Non-main groups can only schedule for themselves
-    const targetJid = isMain && args.target_group_jid ? args.target_group_jid : chatJid;
+    const targetJid =
+      isMain && args.target_group_jid ? args.target_group_jid : chatJid;
 
     const data = {
       type: 'schedule_task',
@@ -503,7 +561,12 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     const filename = writeIpcFile(TASKS_DIR, data);
 
     return {
-      content: [{ type: 'text' as const, text: `Task scheduled (${filename}): ${args.schedule_type} - ${args.schedule_value}` }],
+      content: [
+        {
+          type: 'text' as const,
+          text: `Task scheduled (${filename}): ${args.schedule_type} - ${args.schedule_value}`,
+        },
+      ],
     };
   },
 );
@@ -517,30 +580,56 @@ server.tool(
 
     try {
       if (!fs.existsSync(tasksFile)) {
-        return { content: [{ type: 'text' as const, text: 'No scheduled tasks found.' }] };
+        return {
+          content: [
+            { type: 'text' as const, text: 'No scheduled tasks found.' },
+          ],
+        };
       }
 
       const allTasks = JSON.parse(fs.readFileSync(tasksFile, 'utf-8'));
 
       const tasks = isMain
         ? allTasks
-        : allTasks.filter((t: { groupFolder: string }) => t.groupFolder === groupFolder);
+        : allTasks.filter(
+            (t: { groupFolder: string }) => t.groupFolder === groupFolder,
+          );
 
       if (tasks.length === 0) {
-        return { content: [{ type: 'text' as const, text: 'No scheduled tasks found.' }] };
+        return {
+          content: [
+            { type: 'text' as const, text: 'No scheduled tasks found.' },
+          ],
+        };
       }
 
       const formatted = tasks
         .map(
-          (t: { id: string; prompt: string; schedule_type: string; schedule_value: string; status: string; next_run: string }) =>
+          (t: {
+            id: string;
+            prompt: string;
+            schedule_type: string;
+            schedule_value: string;
+            status: string;
+            next_run: string;
+          }) =>
             `- [${t.id}] ${t.prompt.slice(0, 50)}... (${t.schedule_type}: ${t.schedule_value}) - ${t.status}, next: ${t.next_run || 'N/A'}`,
         )
         .join('\n');
 
-      return { content: [{ type: 'text' as const, text: `Scheduled tasks:\n${formatted}` }] };
+      return {
+        content: [
+          { type: 'text' as const, text: `Scheduled tasks:\n${formatted}` },
+        ],
+      };
     } catch (err) {
       return {
-        content: [{ type: 'text' as const, text: `Error reading tasks: ${err instanceof Error ? err.message : String(err)}` }],
+        content: [
+          {
+            type: 'text' as const,
+            text: `Error reading tasks: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
       };
     }
   },
@@ -561,7 +650,14 @@ server.tool(
 
     writeIpcFile(TASKS_DIR, data);
 
-    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} pause requested.` }] };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Task ${args.task_id} pause requested.`,
+        },
+      ],
+    };
   },
 );
 
@@ -580,7 +676,14 @@ server.tool(
 
     writeIpcFile(TASKS_DIR, data);
 
-    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} resume requested.` }] };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Task ${args.task_id} resume requested.`,
+        },
+      ],
+    };
   },
 );
 
@@ -599,7 +702,14 @@ server.tool(
 
     writeIpcFile(TASKS_DIR, data);
 
-    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} cancellation requested.` }] };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Task ${args.task_id} cancellation requested.`,
+        },
+      ],
+    };
   },
 );
 
@@ -609,15 +719,28 @@ server.tool(
 
 Use available_groups.json to find the JID for a group. The folder name must be channel-prefixed: "{channel}_{group-name}" (e.g., "whatsapp_family-chat", "telegram_dev-team", "discord_general"). Use lowercase with hyphens for the group name part.`,
   {
-    jid: z.string().describe('The chat JID (e.g., "120363336345536173@g.us", "tg:-1001234567890", "dc:1234567890123456")'),
+    jid: z
+      .string()
+      .describe(
+        'The chat JID (e.g., "120363336345536173@g.us", "tg:-1001234567890", "dc:1234567890123456")',
+      ),
     name: z.string().describe('Display name for the group'),
-    folder: z.string().describe('Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")'),
+    folder: z
+      .string()
+      .describe(
+        'Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")',
+      ),
     trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
   },
   async (args: RegisterGroupArgs) => {
     if (!isMain) {
       return {
-        content: [{ type: 'text' as const, text: 'Only the main group can register new groups.' }],
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can register new groups.',
+          },
+        ],
         isError: true,
       };
     }
@@ -634,7 +757,12 @@ Use available_groups.json to find the JID for a group. The folder name must be c
     writeIpcFile(TASKS_DIR, data);
 
     return {
-      content: [{ type: 'text' as const, text: `Group "${args.name}" registered. It will start receiving messages immediately.` }],
+      content: [
+        {
+          type: 'text' as const,
+          text: `Group "${args.name}" registered. It will start receiving messages immediately.`,
+        },
+      ],
     };
   },
 );
@@ -649,19 +777,25 @@ Actions: add, update, remove, mark_bought (shopping), unmark_bought (shopping), 
 See the lists skill documentation for item_data JSON formats and shopping categories.`,
   {
     action: z
-      .enum(['add', 'update', 'remove', 'mark_bought', 'unmark_bought', 'add_note'])
+      .enum([
+        'add',
+        'update',
+        'remove',
+        'mark_bought',
+        'unmark_bought',
+        'add_note',
+      ])
       .describe('The operation to perform'),
     list_type: z
       .enum(['todo', 'shopping', 'purchases', 'ideas'])
-      .describe('Which list to operate on. shopping=groceries/food only, purchases=generic non-food items'),
+      .describe(
+        'Which list to operate on. shopping=groceries/food only, purchases=generic non-food items',
+      ),
     item_data: z
       .string()
       .optional()
       .describe('JSON string with item fields (for add/update)'),
-    item_id: z
-      .string()
-      .optional()
-      .describe('ID of the item to update/remove'),
+    item_id: z.string().optional().describe('ID of the item to update/remove'),
     note_text: z
       .string()
       .optional()
@@ -671,19 +805,39 @@ See the lists skill documentation for item_data JSON formats and shopping catego
     // Validate required params per action
     if (args.action === 'add' && !args.item_data) {
       return {
-        content: [{ type: 'text' as const, text: 'item_data is required for add action.' }],
+        content: [
+          {
+            type: 'text' as const,
+            text: 'item_data is required for add action.',
+          },
+        ],
         isError: true,
       };
     }
-    if (['update', 'remove', 'mark_bought', 'unmark_bought', 'add_note'].includes(args.action) && !args.item_id) {
+    if (
+      ['update', 'remove', 'mark_bought', 'unmark_bought', 'add_note'].includes(
+        args.action,
+      ) &&
+      !args.item_id
+    ) {
       return {
-        content: [{ type: 'text' as const, text: 'item_id is required for this action.' }],
+        content: [
+          {
+            type: 'text' as const,
+            text: 'item_id is required for this action.',
+          },
+        ],
         isError: true,
       };
     }
     if (args.action === 'add_note' && !args.note_text) {
       return {
-        content: [{ type: 'text' as const, text: 'note_text is required for add_note action.' }],
+        content: [
+          {
+            type: 'text' as const,
+            text: 'note_text is required for add_note action.',
+          },
+        ],
         isError: true,
       };
     }
@@ -705,7 +859,11 @@ See the lists skill documentation for item_data JSON formats and shopping catego
     writeIpcFile(TASKS_DIR, data);
 
     // Poll for response
-    const responsePath = path.join(IPC_DIR, 'list_responses', `${requestId}.json`);
+    const responsePath = path.join(
+      IPC_DIR,
+      'list_responses',
+      `${requestId}.json`,
+    );
     const pollInterval = 200;
     const timeout = 5000;
     const start = Date.now();
@@ -716,12 +874,14 @@ See the lists skill documentation for item_data JSON formats and shopping catego
           const result = JSON.parse(fs.readFileSync(responsePath, 'utf-8'));
           fs.unlinkSync(responsePath);
           return {
-            content: [{
-              type: 'text' as const,
-              text: result.success
-                ? `${result.message}${result.item_id ? ` (ID: ${result.item_id})` : ''}`
-                : `Error: ${result.message}`,
-            }],
+            content: [
+              {
+                type: 'text' as const,
+                text: result.success
+                  ? `${result.message}${result.item_id ? ` (ID: ${result.item_id})` : ''}`
+                  : `Error: ${result.message}`,
+              },
+            ],
             isError: !result.success,
           };
         } catch {
@@ -732,7 +892,137 @@ See the lists skill documentation for item_data JSON formats and shopping catego
     }
 
     return {
-      content: [{ type: 'text' as const, text: 'List operation timed out waiting for host response.' }],
+      content: [
+        {
+          type: 'text' as const,
+          text: 'List operation timed out waiting for host response.',
+        },
+      ],
+      isError: true,
+    };
+  },
+);
+
+interface SearchMessagesArgs {
+  query: string;
+  chat_jid?: string;
+  channel?: string;
+  sender_name?: string;
+  limit?: number;
+}
+
+server.tool(
+  'search_messages',
+  `Search through stored messages across all channels. Main group only.
+Use this to find past messages by keyword, optionally filtering by chat or channel.
+Results are ordered by most recent first.`,
+  {
+    query: z.string().describe('Text to search for in message content'),
+    chat_jid: z.string().optional().describe('Filter by specific chat JID'),
+    channel: z
+      .string()
+      .optional()
+      .describe('Filter by channel name (e.g., "whatsapp", "telegram")'),
+    limit: z
+      .number()
+      .optional()
+      .describe('Max results to return (default: 20)'),
+    sender_name: z
+      .string()
+      .optional()
+      .describe('Filter by sender name (partial match)'),
+  },
+  async (args: SearchMessagesArgs) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can search messages.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'search_messages',
+      requestId,
+      query: args.query,
+      chatJid: args.chat_jid,
+      channel: args.channel,
+      limit: args.limit,
+      senderName: args.sender_name,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Poll for response
+    const responsePath = path.join(
+      IPC_DIR,
+      'search_responses',
+      `${requestId}.json`,
+    );
+    const pollInterval = 200;
+    const timeout = 10000;
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+      if (fs.existsSync(responsePath)) {
+        try {
+          const result = JSON.parse(fs.readFileSync(responsePath, 'utf-8')) as {
+            success: boolean;
+            results: Array<{
+              chat_jid: string;
+              sender_name: string;
+              content: string;
+              timestamp: string;
+            }>;
+          };
+          fs.unlinkSync(responsePath);
+
+          if (!result.success || result.results.length === 0) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: 'No messages found matching your query.',
+                },
+              ],
+            };
+          }
+
+          const formatted = result.results
+            .map(
+              (m) =>
+                `[${m.timestamp}] ${m.chat_jid} | ${m.sender_name}: ${m.content}`,
+            )
+            .join('\n\n');
+
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Found ${result.results.length} messages:\n\n${formatted}`,
+              },
+            ],
+          };
+        } catch {
+          // File might be partially written, retry
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: 'Search timed out waiting for host response.',
+        },
+      ],
       isError: true,
     };
   },

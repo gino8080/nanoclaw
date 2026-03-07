@@ -155,6 +155,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     return true;
   }
 
+  if (channel.readOnly) return true;
+
   const isMainGroup = group.isMain === true;
 
   const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
@@ -425,6 +427,8 @@ async function startMessageLoop(): Promise<void> {
             logger.warn({ chatJid }, 'No channel owns JID, skipping messages');
             continue;
           }
+
+          if (channel.readOnly) continue;
 
           const isMainGroup = group.isMain === true;
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;

@@ -40,6 +40,21 @@ Files are stored in `/workspace/extra/NANO_CLAW_DATA/` (persistent across sessio
 
 This is the **main channel** (Telegram), which has elevated privileges.
 
+## WhatsApp Message Search
+
+You can search through all stored WhatsApp messages using the MCP tool `mcp__nanoclaw__search_messages`.
+
+Parameters:
+- `query` (required): text to search for
+- `channel` (optional): filter by channel, e.g. `"whatsapp"` or `"telegram"`
+- `chat_jid` (optional): filter by specific chat JID
+- `sender_name` (optional): filter by sender name (partial match)
+- `limit` (optional): max results (default 20)
+
+Examples:
+- Find WhatsApp messages containing "hotel": `query: "hotel", channel: "whatsapp"`
+- Find messages from "Marco" about "cena": `query: "cena", sender_name: "Marco"`
+
 ## Agent Teams
 
 When creating a team to tackle a complex task, follow these rules:

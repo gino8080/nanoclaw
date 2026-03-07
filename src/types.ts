@@ -81,6 +81,7 @@ export interface TaskRunLog {
 
 export interface Channel {
   name: string;
+  readOnly?: boolean;
   connect(): Promise<void>;
   sendMessage(jid: string, text: string): Promise<void>;
   isConnected(): boolean;
