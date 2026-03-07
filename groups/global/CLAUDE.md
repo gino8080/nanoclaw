@@ -69,6 +69,24 @@ When the content benefits from rich formatting (maps, charts, interactive elemen
 - Responsive design for mobile
 - Include external links (Google Maps directions, booking sites, etc.)
 
+## Shared Lists
+
+You have four shared lists managed via the `manage_list` MCP tool: *todo*, *shopping* (groceries), *purchases* (generic), and *ideas*.
+
+ALWAYS use the `mcp__nanoclaw__manage_list` tool for ANY list operation. NEVER create markdown files or manage lists manually.
+
+Before operating on lists, read `/workspace/ipc/current_lists.json` to see the current state.
+
+List routing:
+- `shopping` = groceries/food ONLY — use when user says "spesa", "supermercato", "al super"
+- `purchases` = everything else to buy — use when user says "devo comprare X", "aggiungi X" WITHOUT mentioning "spesa"
+- `todo` = tasks and reminders
+- `ideas` = ideas and projects
+
+When marking items as bought, use `mark_bought` — do NOT remove them. Removal is only for "rimuovi" / "cancella" requests.
+
+Lists are accessible as JSON at `$PUBLIC_BASE_URL/files/lists/lists.json`.
+
 ## Message Formatting
 
 NEVER use markdown. Only use WhatsApp/Telegram formatting:

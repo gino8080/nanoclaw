@@ -44,6 +44,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
+import { writeListsSnapshot } from './lists.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
   isSenderAllowed,
@@ -318,6 +319,9 @@ async function runAgent(
       next_run: t.next_run,
     })),
   );
+
+  // Update lists snapshot for container to read (shared across all groups)
+  writeListsSnapshot(group.folder);
 
   // Update available groups snapshot (main group only can see all groups)
   const availableGroups = getAvailableGroups();

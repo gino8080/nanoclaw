@@ -12,6 +12,7 @@ import {
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
+import { processListOperation } from './lists.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
@@ -284,6 +285,13 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For manage_list
+    requestId?: string;
+    action?: string;
+    list_type?: string;
+    item_data?: string;
+    item_id?: string;
+    note_text?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -495,6 +503,46 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'manage_list': {
+      if (!data.requestId || !data.action || !data.list_type) {
+        logger.warn({ data }, 'Invalid manage_list request');
+        break;
+      }
+      const result = processListOperation({
+        action: data.action,
+        list_type: data.list_type,
+        item_data: data.item_data,
+        item_id: data.item_id,
+        note_text: data.note_text,
+        source_group: sourceGroup,
+      });
+
+      // Write response for the container to poll
+      const responseDir = path.join(
+        DATA_DIR,
+        'ipc',
+        sourceGroup,
+        'list_responses',
+      );
+      fs.mkdirSync(responseDir, { recursive: true });
+      const responsePath = path.join(responseDir, `${data.requestId}.json`);
+      const tmpPath = `${responsePath}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(result));
+      fs.renameSync(tmpPath, responsePath);
+
+      logger.info(
+        {
+          requestId: data.requestId,
+          action: data.action,
+          list_type: data.list_type,
+          success: result.success,
+          sourceGroup,
+        },
+        'List operation processed',
+      );
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

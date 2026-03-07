@@ -15,6 +15,69 @@ const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 
+// Tool argument types
+interface SendMessageArgs {
+  text: string;
+  sender?: string;
+}
+
+interface FilePathArgs {
+  file_path: string;
+  caption?: string;
+  sender?: string;
+}
+
+type AspectRatio =
+  | '1:1'
+  | '2:3'
+  | '3:2'
+  | '3:4'
+  | '4:3'
+  | '4:5'
+  | '5:4'
+  | '9:16'
+  | '16:9'
+  | '21:9'
+  | '1:4'
+  | '4:1'
+  | '1:8'
+  | '8:1';
+
+interface GenerateImageArgs {
+  prompt: string;
+  image_base64?: string;
+  aspect_ratio?: AspectRatio;
+  image_size?: '0.5K' | '1K' | '2K' | '4K';
+  filename?: string;
+}
+
+interface ScheduleTaskArgs {
+  prompt: string;
+  schedule_type: 'cron' | 'interval' | 'once';
+  schedule_value: string;
+  context_mode: 'group' | 'isolated';
+  target_group_jid?: string;
+}
+
+interface TaskIdArgs {
+  task_id: string;
+}
+
+interface RegisterGroupArgs {
+  jid: string;
+  name: string;
+  folder: string;
+  trigger: string;
+}
+
+interface ManageListArgs {
+  action: 'add' | 'update' | 'remove' | 'mark_bought' | 'unmark_bought' | 'add_note';
+  list_type: 'todo' | 'shopping' | 'purchases' | 'ideas';
+  item_data?: string;
+  item_id?: string;
+  note_text?: string;
+}
+
 // Context from environment variables (set by the agent runner)
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
@@ -46,7 +109,7 @@ server.tool(
     text: z.string().describe('The message text to send'),
     sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
   },
-  async (args) => {
+  async (args: SendMessageArgs) => {
     const data: Record<string, string | undefined> = {
       type: 'message',
       chatJid,
@@ -80,7 +143,7 @@ The image appears directly in the Telegram chat as a photo.`,
         'Your role/identity name (e.g. "Researcher"). When set, the image is sent from a dedicated bot.',
       ),
   },
-  async (args) => {
+  async (args: FilePathArgs) => {
     try {
       if (!fs.existsSync(args.file_path)) {
         return {
@@ -143,7 +206,7 @@ For images (jpg/png/gif/webp), prefer send_image instead — it renders inline.`
       .optional()
       .describe('Your role/identity name for swarm bots.'),
   },
-  async (args) => {
+  async (args: FilePathArgs) => {
     try {
       if (!fs.existsSync(args.file_path)) {
         return {
@@ -245,7 +308,7 @@ Image config defaults: 1K resolution, 1:1 aspect ratio. Override with parameters
         'Output filename (default: generated-{timestamp}.png). Saved in the mounted data directory.',
       ),
   },
-  async (args) => {
+  async (args: GenerateImageArgs) => {
     const webhookUrl = process.env.IMAGE_WEBHOOK_URL;
     if (!webhookUrl) {
       return {
@@ -388,7 +451,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     context_mode: z.enum(['group', 'isolated']).default('group').describe('group=runs with chat history and memory, isolated=fresh session (include context in prompt)'),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
   },
-  async (args) => {
+  async (args: ScheduleTaskArgs) => {
     // Validate schedule_value before writing IPC
     if (args.schedule_type === 'cron') {
       try {
@@ -487,7 +550,7 @@ server.tool(
   'pause_task',
   'Pause a scheduled task. It will not run until resumed.',
   { task_id: z.string().describe('The task ID to pause') },
-  async (args) => {
+  async (args: TaskIdArgs) => {
     const data = {
       type: 'pause_task',
       taskId: args.task_id,
@@ -506,7 +569,7 @@ server.tool(
   'resume_task',
   'Resume a paused task.',
   { task_id: z.string().describe('The task ID to resume') },
-  async (args) => {
+  async (args: TaskIdArgs) => {
     const data = {
       type: 'resume_task',
       taskId: args.task_id,
@@ -525,7 +588,7 @@ server.tool(
   'cancel_task',
   'Cancel and delete a scheduled task.',
   { task_id: z.string().describe('The task ID to cancel') },
-  async (args) => {
+  async (args: TaskIdArgs) => {
     const data = {
       type: 'cancel_task',
       taskId: args.task_id,
@@ -551,7 +614,7 @@ Use available_groups.json to find the JID for a group. The folder name must be c
     folder: z.string().describe('Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")'),
     trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
   },
-  async (args) => {
+  async (args: RegisterGroupArgs) => {
     if (!isMain) {
       return {
         content: [{ type: 'text' as const, text: 'Only the main group can register new groups.' }],
@@ -572,6 +635,105 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 
     return {
       content: [{ type: 'text' as const, text: `Group "${args.name}" registered. It will start receiving messages immediately.` }],
+    };
+  },
+);
+
+server.tool(
+  'manage_list',
+  `Manage shared lists (todo, shopping, ideas). Lists are shared across all groups.
+
+Read current state from /workspace/ipc/current_lists.json before operating.
+
+Actions: add, update, remove, mark_bought (shopping), unmark_bought (shopping), add_note (ideas).
+See the lists skill documentation for item_data JSON formats and shopping categories.`,
+  {
+    action: z
+      .enum(['add', 'update', 'remove', 'mark_bought', 'unmark_bought', 'add_note'])
+      .describe('The operation to perform'),
+    list_type: z
+      .enum(['todo', 'shopping', 'purchases', 'ideas'])
+      .describe('Which list to operate on. shopping=groceries/food only, purchases=generic non-food items'),
+    item_data: z
+      .string()
+      .optional()
+      .describe('JSON string with item fields (for add/update)'),
+    item_id: z
+      .string()
+      .optional()
+      .describe('ID of the item to update/remove'),
+    note_text: z
+      .string()
+      .optional()
+      .describe('Text of the note (for add_note on ideas)'),
+  },
+  async (args: ManageListArgs) => {
+    // Validate required params per action
+    if (args.action === 'add' && !args.item_data) {
+      return {
+        content: [{ type: 'text' as const, text: 'item_data is required for add action.' }],
+        isError: true,
+      };
+    }
+    if (['update', 'remove', 'mark_bought', 'unmark_bought', 'add_note'].includes(args.action) && !args.item_id) {
+      return {
+        content: [{ type: 'text' as const, text: 'item_id is required for this action.' }],
+        isError: true,
+      };
+    }
+    if (args.action === 'add_note' && !args.note_text) {
+      return {
+        content: [{ type: 'text' as const, text: 'note_text is required for add_note action.' }],
+        isError: true,
+      };
+    }
+
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const data = {
+      type: 'manage_list',
+      requestId,
+      action: args.action,
+      list_type: args.list_type,
+      item_data: args.item_data,
+      item_id: args.item_id,
+      note_text: args.note_text,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    // Poll for response
+    const responsePath = path.join(IPC_DIR, 'list_responses', `${requestId}.json`);
+    const pollInterval = 200;
+    const timeout = 5000;
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+      if (fs.existsSync(responsePath)) {
+        try {
+          const result = JSON.parse(fs.readFileSync(responsePath, 'utf-8'));
+          fs.unlinkSync(responsePath);
+          return {
+            content: [{
+              type: 'text' as const,
+              text: result.success
+                ? `${result.message}${result.item_id ? ` (ID: ${result.item_id})` : ''}`
+                : `Error: ${result.message}`,
+            }],
+            isError: !result.success,
+          };
+        } catch {
+          // File might be partially written, retry
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: 'List operation timed out waiting for host response.' }],
+      isError: true,
     };
   },
 );
