@@ -10,7 +10,9 @@ import path from 'path';
 import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
+  CONTAINER_MEMORY,
   CONTAINER_TIMEOUT,
+  CONTAINER_WATCHDOG_TIMEOUT,
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
@@ -245,7 +247,15 @@ function buildContainerArgs(
   containerName: string,
   isMain: boolean,
 ): string[] {
-  const args: string[] = ['run', '-i', '--rm', '--name', containerName];
+  const args: string[] = [
+    'run',
+    '-i',
+    '--rm',
+    '--name',
+    containerName,
+    '-m',
+    `${CONTAINER_MEMORY}MB`,
+  ];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
@@ -389,7 +399,7 @@ export async function runContainerAgent(
             }
             hadStreamingOutput = true;
             // Activity detected — reset the hard timeout
-            resetTimeout();
+            resetWatchdog();
             // Call onOutput for all markers (including null results)
             // so idle timers start even for "silent" query completions.
             outputChain = outputChain.then(() => onOutput(parsed));
@@ -428,14 +438,14 @@ export async function runContainerAgent(
     let timedOut = false;
     let hadStreamingOutput = false;
     const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
-    // Grace period: hard timeout must be at least IDLE_TIMEOUT + 30s so the
-    // graceful _close sentinel has time to trigger before the hard kill fires.
-    const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
+    // Hard timeout: absolute max lifetime, never resets.
+    const hardTimeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
 
-    const killOnTimeout = () => {
+    const gracefulKill = (reason: string) => {
+      if (timedOut) return; // already killing
       timedOut = true;
       logger.error(
-        { group: group.name, containerName },
+        { group: group.name, containerName, reason },
         'Container timeout, stopping gracefully',
       );
       exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
@@ -449,16 +459,29 @@ export async function runContainerAgent(
       });
     };
 
-    let timeout = setTimeout(killOnTimeout, timeoutMs);
+    // Hard timeout — absolute lifetime cap, never resets
+    const hardTimeout = setTimeout(
+      () => gracefulKill('hard timeout'),
+      hardTimeoutMs,
+    );
 
-    // Reset the timeout whenever there's activity (streaming output)
-    const resetTimeout = () => {
-      clearTimeout(timeout);
-      timeout = setTimeout(killOnTimeout, timeoutMs);
+    // Watchdog — resets on every output; kills if container goes silent too long
+    let watchdog = setTimeout(
+      () => gracefulKill('watchdog (no output)'),
+      CONTAINER_WATCHDOG_TIMEOUT,
+    );
+
+    const resetWatchdog = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(
+        () => gracefulKill('watchdog (no output)'),
+        CONTAINER_WATCHDOG_TIMEOUT,
+      );
     };
 
     container.on('close', (code) => {
-      clearTimeout(timeout);
+      clearTimeout(hardTimeout);
+      clearTimeout(watchdog);
       const duration = Date.now() - startTime;
 
       if (timedOut) {
@@ -653,7 +676,8 @@ export async function runContainerAgent(
     });
 
     container.on('error', (err) => {
-      clearTimeout(timeout);
+      clearTimeout(hardTimeout);
+      clearTimeout(watchdog);
       logger.error(
         { group: group.name, containerName, error: err },
         'Container spawn error',

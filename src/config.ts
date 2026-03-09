@@ -43,8 +43,15 @@ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
+export const CONTAINER_MEMORY = process.env.CONTAINER_MEMORY || '3072'; // MB — Apple Container -m flag
 export const CONTAINER_TIMEOUT = parseInt(
   process.env.CONTAINER_TIMEOUT || '1800000',
+  10,
+);
+// Watchdog: kill container if no output for this duration (default 10 min).
+// Separate from CONTAINER_TIMEOUT (total lifetime) and IDLE_TIMEOUT (post-output keep-alive).
+export const CONTAINER_WATCHDOG_TIMEOUT = parseInt(
+  process.env.CONTAINER_WATCHDOG_TIMEOUT || '600000',
   10,
 );
 export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
