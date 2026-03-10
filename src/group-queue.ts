@@ -1,8 +1,9 @@
-import { ChildProcess } from 'child_process';
+import { ChildProcess, execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR, MAX_CONCURRENT_CONTAINERS } from './config.js';
+import { stopContainer } from './container-runtime.js';
 import { logger } from './logger.js';
 
 interface QueuedTask {
@@ -190,6 +191,29 @@ export class GroupQueue {
       fs.writeFileSync(path.join(inputDir, '_close'), '');
     } catch {
       // ignore
+    }
+  }
+
+  /**
+   * Stop the active container for a group. Used by /reset to ensure
+   * the next message spawns a fresh container with updated code/config.
+   */
+  stopGroup(groupJid: string): void {
+    const state = this.getGroup(groupJid);
+    if (!state.active) return;
+
+    if (state.containerName) {
+      try {
+        execSync(stopContainer(state.containerName), {
+          stdio: 'pipe',
+          timeout: 10000,
+        });
+      } catch {
+        // Container may have already exited
+      }
+    }
+    if (state.process && !state.process.killed) {
+      state.process.kill('SIGKILL');
     }
   }
 

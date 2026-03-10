@@ -234,6 +234,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       if (text) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
+        // Store bot response in DB so it's searchable via FTS memory
+        storeMessage({
+          id: `bot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          chat_jid: chatJid,
+          sender: 'bot',
+          sender_name: ASSISTANT_NAME,
+          content: text,
+          timestamp: new Date().toISOString(),
+          is_from_me: true,
+          is_bot_message: true,
+        });
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
@@ -589,11 +600,13 @@ async function main(): Promise<void> {
         const had = !!sessions[groupFolder];
         delete sessions[groupFolder];
         deleteSession(groupFolder);
-        consecutiveFailures[
+        const groupJid =
           Object.entries(registeredGroups).find(
             ([, g]) => g.folder === groupFolder,
-          )?.[0] ?? ''
-        ] = 0;
+          )?.[0] ?? '';
+        consecutiveFailures[groupJid] = 0;
+        // Kill the active container so next message spawns fresh
+        if (groupJid) queue.stopGroup(groupJid);
         logger.info({ groupFolder }, 'Session reset via /reset command');
         return had
           ? `✅ Session for \`${groupFolder}\` cleared. Next message starts fresh.`
@@ -671,6 +684,17 @@ async function main(): Promise<void> {
     sendMessage: (jid, text) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      // Store bot IPC messages in DB for FTS memory
+      storeMessage({
+        id: `bot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        chat_jid: jid,
+        sender: 'bot',
+        sender_name: ASSISTANT_NAME,
+        content: text,
+        timestamp: new Date().toISOString(),
+        is_from_me: true,
+        is_bot_message: true,
+      });
       return channel.sendMessage(jid, text);
     },
     sendPhoto: (jid, photo, caption) => {

@@ -183,10 +183,10 @@ function createSchema(database: Database.Database): void {
       last_accessed_at TEXT,
       expires_at TEXT
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_group_key
-      ON knowledge(group_folder, key);
-    CREATE INDEX IF NOT EXISTS idx_knowledge_group_category
-      ON knowledge(group_folder, category);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_key
+      ON knowledge(key);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_category
+      ON knowledge(category);
   `);
   database.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
@@ -220,39 +220,48 @@ function createSchema(database: Database.Database): void {
 }
 
 function migrateFts(database: Database.Database): void {
-  // Check if FTS index is already populated
-  const count = database
-    .prepare('SELECT COUNT(*) as c FROM messages_fts')
-    .get() as { c: number };
-  if (count.c > 0) return;
+  // Content-sync FTS5 tables must use 'rebuild' command to populate the index.
+  // Direct INSERT into content-sync tables creates rows but doesn't build the
+  // inverted index, making MATCH queries fail on backfilled data.
+  // We track rebuild state via a simple metadata table to avoid re-running on every startup.
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS _migrations (
+      key TEXT PRIMARY KEY,
+      done_at TEXT NOT NULL
+    )
+  `);
+
+  const ftsRebuilt = database
+    .prepare("SELECT 1 FROM _migrations WHERE key = 'fts_rebuild_v1'")
+    .get();
+  if (ftsRebuilt) return;
 
   const msgCount = database
     .prepare('SELECT COUNT(*) as c FROM messages WHERE content IS NOT NULL')
     .get() as { c: number };
-  if (msgCount.c === 0) return;
+  if (msgCount.c > 0) {
+    logger.info({ messages: msgCount.c }, 'Rebuilding messages FTS index');
+    database.exec(
+      "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",
+    );
+  }
 
-  logger.info({ messages: msgCount.c }, 'Populating messages FTS index');
-  database.exec(`
-    INSERT INTO messages_fts(rowid, content, sender_name)
-    SELECT rowid, content, sender_name FROM messages WHERE content IS NOT NULL
-  `);
-
-  // Also backfill knowledge FTS if needed
   const kCount = database
     .prepare('SELECT COUNT(*) as c FROM knowledge')
     .get() as { c: number };
   if (kCount.c > 0) {
-    const kFtsCount = database
-      .prepare('SELECT COUNT(*) as c FROM knowledge_fts')
-      .get() as { c: number };
-    if (kFtsCount.c === 0) {
-      logger.info({ entries: kCount.c }, 'Populating knowledge FTS index');
-      database.exec(`
-        INSERT INTO knowledge_fts(rowid, key, value, category)
-        SELECT id, key, value, category FROM knowledge
-      `);
-    }
+    logger.info({ entries: kCount.c }, 'Rebuilding knowledge FTS index');
+    database.exec(
+      "INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')",
+    );
   }
+
+  database
+    .prepare(
+      "INSERT INTO _migrations (key, done_at) VALUES ('fts_rebuild_v1', ?)",
+    )
+    .run(new Date().toISOString());
 }
 
 export function initDatabase(): void {
@@ -856,16 +865,17 @@ export function upsertKnowledge(
 ): { action: 'inserted' | 'updated'; previous_value?: string } {
   const now = new Date().toISOString();
 
+  // Knowledge is not partitioned — UPSERT by key only
   const existing = db
-    .prepare('SELECT value FROM knowledge WHERE group_folder = ? AND key = ?')
-    .get(groupFolder, key) as { value: string } | undefined;
+    .prepare('SELECT value FROM knowledge WHERE key = ?')
+    .get(key) as { value: string } | undefined;
 
   if (existing) {
     db.prepare(
       `UPDATE knowledge
        SET value = ?, category = ?, source = ?, confidence = ?,
-           updated_at = ?, expires_at = ?
-       WHERE group_folder = ? AND key = ?`,
+           updated_at = ?, expires_at = ?, group_folder = ?
+       WHERE key = ?`,
     ).run(
       value,
       category,
@@ -898,7 +908,7 @@ export function upsertKnowledge(
 }
 
 export function searchKnowledge(
-  groupFolder: string,
+  _groupFolder: string,
   query: string,
   category?: string,
   limit = 20,
@@ -906,8 +916,9 @@ export function searchKnowledge(
   const safeQuery = query.replace(/['"*()]/g, ' ').trim();
   if (!safeQuery) return [];
 
-  const conditions = ['knowledge_fts MATCH ?', 'k.group_folder = ?'];
-  const params: unknown[] = [`"${safeQuery}"`, groupFolder];
+  // Knowledge is not partitioned — one user, one memory across all groups
+  const conditions = ['knowledge_fts MATCH ?'];
+  const params: unknown[] = [`"${safeQuery}"`];
 
   if (category) {
     conditions.push('k.category = ?');
@@ -926,7 +937,31 @@ export function searchKnowledge(
   `;
 
   try {
-    const results = db.prepare(sql).all(...params) as KnowledgeEntry[];
+    let results = db.prepare(sql).all(...params) as KnowledgeEntry[];
+
+    // If FTS found nothing, return all knowledge entries as fallback.
+    // The store is small (<100 entries) so the token cost is negligible,
+    // and this lets the agent reason about what it knows even when the
+    // query terms don't match (e.g. "quanti anni ho" vs key "user_birthdate").
+    if (results.length === 0) {
+      const fallbackConditions: string[] = [];
+      const fallbackParams: unknown[] = [];
+      if (category) {
+        fallbackConditions.push('category = ?');
+        fallbackParams.push(category);
+      }
+      fallbackParams.push(limit);
+      const whereClause =
+        fallbackConditions.length > 0
+          ? `WHERE ${fallbackConditions.join(' AND ')}`
+          : '';
+      results = db
+        .prepare(
+          `SELECT * FROM knowledge ${whereClause} ORDER BY updated_at DESC LIMIT ?`,
+        )
+        .all(...fallbackParams) as KnowledgeEntry[];
+    }
+
     // Update last_accessed_at for returned entries
     if (results.length > 0) {
       const now = new Date().toISOString();
@@ -943,14 +978,15 @@ export function searchKnowledge(
 }
 
 export function listKnowledge(
-  groupFolder: string,
+  _groupFolder: string,
   category?: string,
   prefix?: string,
   onlyExpired?: boolean,
   limit = 50,
 ): KnowledgeEntry[] {
-  const conditions = ['group_folder = ?'];
-  const params: unknown[] = [groupFolder];
+  // Knowledge is not partitioned — one user, one memory across all groups
+  const conditions: string[] = [];
+  const params: unknown[] = [];
 
   if (category) {
     conditions.push('category = ?');
@@ -967,18 +1003,21 @@ export function listKnowledge(
 
   params.push(limit);
 
+  const whereClause =
+    conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   return db
     .prepare(
-      `SELECT * FROM knowledge WHERE ${conditions.join(' AND ')}
+      `SELECT * FROM knowledge ${whereClause}
        ORDER BY updated_at DESC LIMIT ?`,
     )
     .all(...params) as KnowledgeEntry[];
 }
 
-export function deleteKnowledge(groupFolder: string, key: string): boolean {
+export function deleteKnowledge(_groupFolder: string, key: string): boolean {
+  // Knowledge is not partitioned — delete by key only
   const result = db
-    .prepare('DELETE FROM knowledge WHERE group_folder = ? AND key = ?')
-    .run(groupFolder, key);
+    .prepare('DELETE FROM knowledge WHERE key = ?')
+    .run(key);
   return result.changes > 0;
 }
 

@@ -10,5 +10,5 @@
 // telegram
 import './telegram.js';
 
-// whatsapp
-import './whatsapp.js';
+// whatsapp (disabled — not needed, avoids polluting memory)
+// import './whatsapp.js';
