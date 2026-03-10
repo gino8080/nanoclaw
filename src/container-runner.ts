@@ -231,6 +231,7 @@ function readSecrets(): Record<string, string> {
     'ANTHROPIC_AUTH_TOKEN',
     'IMAGE_WEBHOOK_URL',
     'GOOGLE_MAPS_API_KEY',
+    'FIRECRAWL_API_KEY',
   ]);
 
   // Try cached token (written by /login command) — overrides .env

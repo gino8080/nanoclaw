@@ -445,6 +445,7 @@ async function runQuery(
         'mcp__gmail__list_email_labels',
         'mcp__gmail__download_attachment',
         'mcp__googlemaps__*',
+        'mcp__firecrawl__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -471,6 +472,15 @@ async function runQuery(
             args: [path.join(path.dirname(mcpServerPath), 'googlemaps-mcp.js')],
             env: {
               GOOGLE_MAPS_API_KEY: sdkEnv.GOOGLE_MAPS_API_KEY,
+            },
+          },
+        } : {}),
+        ...(sdkEnv.FIRECRAWL_API_KEY ? {
+          firecrawl: {
+            command: 'node',
+            args: [path.join(path.dirname(mcpServerPath), 'firecrawl-mcp.js')],
+            env: {
+              FIRECRAWL_API_KEY: sdkEnv.FIRECRAWL_API_KEY,
             },
           },
         } : {}),

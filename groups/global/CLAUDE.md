@@ -127,6 +127,20 @@ Tips:
 - Combine with HTML pages: search places → generate an interactive Leaflet map with results → share the link.
 - `place_details` returns reviews and opening hours — use it when the user wants to compare or choose.
 
+## Web Scraping with Firecrawl
+
+You have access to Firecrawl via `mcp__firecrawl__scrape` for intelligent web scraping. Use this when:
+- `agent-browser` gets blocked or a page requires heavy JS rendering
+- You need to extract clean content from a URL as markdown
+- A site has anti-bot protections
+
+Parameters:
+- `url` (required): the URL to scrape
+- `onlyMainContent` (optional, default true): extract only the main content
+- `waitFor` (optional): milliseconds to wait for JS to render
+
+Prefer Firecrawl over agent-browser for simple content extraction. Use agent-browser when you need to interact with the page (click, fill forms, navigate).
+
 ## Message Formatting
 
 NEVER use markdown. Only use WhatsApp/Telegram formatting:
