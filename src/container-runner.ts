@@ -294,6 +294,81 @@ function buildContainerArgs(
   return args;
 }
 
+function writeWorkspaceManifest(groupFolder: string): void {
+  const groupDir = resolveGroupFolderPath(groupFolder);
+  const ipcDir = resolveGroupIpcPath(groupFolder);
+  fs.mkdirSync(ipcDir, { recursive: true });
+
+  interface ManifestEntry {
+    path: string;
+    size_kb: number;
+    modified: string;
+    heading?: string;
+  }
+
+  const entries: ManifestEntry[] = [];
+  const MAX_FILES = 50;
+
+  function scanDir(dir: string, prefix: string): void {
+    let items: string[];
+    try {
+      items = fs.readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const item of items) {
+      if (item.startsWith('.')) continue;
+      const fullPath = path.join(dir, item);
+      const relPath = prefix ? `${prefix}/${item}` : item;
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        // Skip logs directory — not useful for memory recall
+        if (item === 'logs') continue;
+        scanDir(fullPath, relPath);
+      } else if (stat.isFile()) {
+        const entry: ManifestEntry = {
+          path: relPath,
+          size_kb: Math.round(stat.size / 1024),
+          modified: stat.mtime.toISOString().split('T')[0],
+        };
+        // Extract heading from .md files
+        if (item.endsWith('.md')) {
+          try {
+            const content = fs.readFileSync(fullPath, 'utf-8');
+            const firstLine = content.split('\n').find((l) => l.trim());
+            if (firstLine) {
+              entry.heading = firstLine.trim().slice(0, 100);
+            }
+          } catch {
+            // Ignore read errors
+          }
+        }
+        entries.push(entry);
+      }
+    }
+  }
+
+  scanDir(groupDir, '');
+
+  // Sort by modified DESC, cap at MAX_FILES
+  entries.sort((a, b) => b.modified.localeCompare(a.modified));
+  const manifest = {
+    generated_at: new Date().toISOString(),
+    files: entries.slice(0, MAX_FILES),
+    total_files: entries.length,
+  };
+
+  const manifestPath = path.join(ipcDir, 'workspace_manifest.json');
+  const tmpPath = `${manifestPath}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(manifest, null, 2));
+  fs.renameSync(tmpPath, manifestPath);
+}
+
 export async function runContainerAgent(
   group: RegisteredGroup,
   input: ContainerInput,
@@ -304,6 +379,9 @@ export async function runContainerAgent(
 
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
+
+  // Write workspace manifest for file discovery by the agent
+  writeWorkspaceManifest(group.folder);
 
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');

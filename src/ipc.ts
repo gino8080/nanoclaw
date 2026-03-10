@@ -13,9 +13,14 @@ import { AvailableGroup } from './container-runner.js';
 import {
   createTask,
   deleteTask,
+  deleteKnowledge,
   getTaskById,
+  listKnowledge,
+  searchKnowledge,
   searchMessages,
+  searchMessagesFts,
   updateTask,
+  upsertKnowledge,
 } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { processListOperation } from './lists.js';
@@ -298,11 +303,22 @@ export async function processTaskIpc(
     item_data?: string;
     item_id?: string;
     note_text?: string;
-    // For search_messages
+    // For search_messages / memory_search
     query?: string;
     limit?: number;
     channel?: string;
     senderName?: string;
+    scope?: 'all' | 'messages' | 'knowledge';
+    // For memory_store
+    key?: string;
+    value?: string;
+    category?: string;
+    source?: string;
+    confidence?: number;
+    expiresAt?: string;
+    // For memory_list
+    prefix?: string;
+    onlyExpired?: boolean;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -567,7 +583,7 @@ export async function processTaskIpc(
         logger.warn({ data }, 'Invalid search_messages request');
         break;
       }
-      const searchResults = searchMessages(
+      const searchResults = searchMessagesFts(
         data.query,
         data.chatJid,
         data.channel,
@@ -601,6 +617,198 @@ export async function processTaskIpc(
           sourceGroup,
         },
         'Search messages processed',
+      );
+      break;
+    }
+
+    case 'memory_search': {
+      if (!data.requestId || !data.query) {
+        logger.warn({ data }, 'Invalid memory_search request');
+        break;
+      }
+      const scope = data.scope || 'all';
+      const groupFolder = isMain
+        ? data.groupFolder || sourceGroup
+        : sourceGroup;
+      const memLimit = data.limit || 20;
+
+      let knowledgeResults: unknown[] = [];
+      let messageResults: unknown[] = [];
+
+      if (scope === 'all' || scope === 'knowledge') {
+        knowledgeResults = searchKnowledge(
+          groupFolder,
+          data.query,
+          data.category,
+          memLimit,
+        );
+      }
+      if (scope === 'all' || scope === 'messages') {
+        messageResults = searchMessagesFts(
+          data.query,
+          data.chatJid,
+          data.channel,
+          memLimit,
+          data.senderName,
+        );
+      }
+
+      const memResponseDir = path.join(
+        DATA_DIR,
+        'ipc',
+        sourceGroup,
+        'memory_responses',
+      );
+      fs.mkdirSync(memResponseDir, { recursive: true });
+      const memResponsePath = path.join(
+        memResponseDir,
+        `${data.requestId}.json`,
+      );
+      const memTmpPath = `${memResponsePath}.tmp`;
+      fs.writeFileSync(
+        memTmpPath,
+        JSON.stringify({
+          success: true,
+          knowledge: knowledgeResults,
+          messages: messageResults,
+        }),
+      );
+      fs.renameSync(memTmpPath, memResponsePath);
+
+      logger.info(
+        {
+          requestId: data.requestId,
+          query: data.query,
+          scope,
+          knowledgeCount: knowledgeResults.length,
+          messageCount: messageResults.length,
+          sourceGroup,
+        },
+        'Memory search processed',
+      );
+      break;
+    }
+
+    case 'memory_store': {
+      if (!data.requestId || !data.key || !data.value || !data.category) {
+        logger.warn({ data }, 'Invalid memory_store request');
+        break;
+      }
+      const storeGroup = isMain ? data.groupFolder || sourceGroup : sourceGroup;
+      const storeResult = upsertKnowledge(
+        storeGroup,
+        data.key,
+        data.value,
+        data.category,
+        data.source,
+        data.confidence,
+        data.expiresAt,
+      );
+
+      const storeResponseDir = path.join(
+        DATA_DIR,
+        'ipc',
+        sourceGroup,
+        'memory_responses',
+      );
+      fs.mkdirSync(storeResponseDir, { recursive: true });
+      const storeResponsePath = path.join(
+        storeResponseDir,
+        `${data.requestId}.json`,
+      );
+      const storeTmpPath = `${storeResponsePath}.tmp`;
+      fs.writeFileSync(
+        storeTmpPath,
+        JSON.stringify({ success: true, ...storeResult }),
+      );
+      fs.renameSync(storeTmpPath, storeResponsePath);
+
+      logger.info(
+        {
+          requestId: data.requestId,
+          key: data.key,
+          action: storeResult.action,
+          sourceGroup,
+        },
+        'Memory store processed',
+      );
+      break;
+    }
+
+    case 'memory_list': {
+      if (!data.requestId) {
+        logger.warn({ data }, 'Invalid memory_list request');
+        break;
+      }
+      const listGroup = isMain ? data.groupFolder || sourceGroup : sourceGroup;
+      const listResults = listKnowledge(
+        listGroup,
+        data.category,
+        data.prefix,
+        data.onlyExpired,
+        data.limit,
+      );
+
+      const listResponseDir = path.join(
+        DATA_DIR,
+        'ipc',
+        sourceGroup,
+        'memory_responses',
+      );
+      fs.mkdirSync(listResponseDir, { recursive: true });
+      const listResponsePath = path.join(
+        listResponseDir,
+        `${data.requestId}.json`,
+      );
+      const listTmpPath = `${listResponsePath}.tmp`;
+      fs.writeFileSync(
+        listTmpPath,
+        JSON.stringify({ success: true, entries: listResults }),
+      );
+      fs.renameSync(listTmpPath, listResponsePath);
+
+      logger.info(
+        {
+          requestId: data.requestId,
+          count: listResults.length,
+          sourceGroup,
+        },
+        'Memory list processed',
+      );
+      break;
+    }
+
+    case 'memory_delete': {
+      if (!data.requestId || !data.key) {
+        logger.warn({ data }, 'Invalid memory_delete request');
+        break;
+      }
+      const delGroup = isMain ? data.groupFolder || sourceGroup : sourceGroup;
+      const deleted = deleteKnowledge(delGroup, data.key);
+
+      const delResponseDir = path.join(
+        DATA_DIR,
+        'ipc',
+        sourceGroup,
+        'memory_responses',
+      );
+      fs.mkdirSync(delResponseDir, { recursive: true });
+      const delResponsePath = path.join(
+        delResponseDir,
+        `${data.requestId}.json`,
+      );
+      const delTmpPath = `${delResponsePath}.tmp`;
+      fs.writeFileSync(delTmpPath, JSON.stringify({ success: true, deleted }));
+      fs.renameSync(delTmpPath, delResponsePath);
+
+      logger.info(
+        {
+          requestId: data.requestId,
+          key: data.key,
+          deleted,
+          sourceGroup,
+        },
+        'Memory delete processed',
       );
       break;
     }

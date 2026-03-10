@@ -1028,6 +1028,351 @@ Results are ordered by most recent first.`,
   },
 );
 
+// --- Memory tools ---
+
+async function pollMemoryResponse(
+  requestId: string,
+  timeoutMs = 10000,
+): Promise<unknown> {
+  const responsePath = path.join(
+    IPC_DIR,
+    'memory_responses',
+    `${requestId}.json`,
+  );
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (fs.existsSync(responsePath)) {
+      try {
+        const result = JSON.parse(fs.readFileSync(responsePath, 'utf-8'));
+        fs.unlinkSync(responsePath);
+        return result;
+      } catch {
+        // File might be partially written, retry
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return null;
+}
+
+server.tool(
+  'memory_search',
+  `Search long-term memory. Searches both stored knowledge (facts, preferences) and message history using full-text search with ranking.
+Knowledge results (distilled facts) are returned first, followed by raw message matches.
+Use this when you need to recall past conversations, user preferences, or stored facts.
+Tip: use word stems for better Italian recall (e.g. "compra" instead of "comprato").`,
+  {
+    query: z
+      .string()
+      .describe('Search query (supports FTS5: "exact phrase", word1 word2)'),
+    scope: z
+      .enum(['all', 'messages', 'knowledge'])
+      .optional()
+      .default('all')
+      .describe(
+        'Search scope: all (default), messages only, or knowledge only',
+      ),
+    category: z
+      .string()
+      .optional()
+      .describe(
+        'Filter knowledge by category: fact, preference, person, event',
+      ),
+    limit: z.number().optional().default(20).describe('Max results per scope'),
+  },
+  async (args: {
+    query: string;
+    scope?: 'all' | 'messages' | 'knowledge';
+    category?: string;
+    limit?: number;
+  }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'memory_search',
+      requestId,
+      query: args.query,
+      scope: args.scope || 'all',
+      category: args.category,
+      limit: args.limit,
+      // No chatJid — memory search should be cross-chat
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollMemoryResponse(requestId)) as {
+      success: boolean;
+      knowledge: Array<{
+        key: string;
+        value: string;
+        category: string;
+        confidence: number;
+        updated_at: string;
+      }>;
+      messages: Array<{
+        sender_name: string;
+        content: string;
+        timestamp: string;
+        chat_jid: string;
+      }>;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'Memory search timed out.' }],
+        isError: true,
+      };
+    }
+
+    const parts: string[] = [];
+
+    if (result.knowledge?.length > 0) {
+      parts.push('## Knowledge Store');
+      for (const k of result.knowledge) {
+        parts.push(
+          `- **${k.key}** [${k.category}] (confidence: ${k.confidence}): ${k.value} _(${k.updated_at})_`,
+        );
+      }
+    }
+
+    if (result.messages?.length > 0) {
+      parts.push('## Message History');
+      for (const m of result.messages) {
+        parts.push(`- [${m.timestamp}] ${m.sender_name}: ${m.content}`);
+      }
+    }
+
+    if (parts.length === 0) {
+      return {
+        content: [{ type: 'text' as const, text: 'No results found.' }],
+      };
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: parts.join('\n') }],
+    };
+  },
+);
+
+server.tool(
+  'memory_store',
+  `Store a fact, preference, or piece of knowledge for long-term recall across sessions.
+Returns whether it inserted a new entry or updated an existing one (with the previous value).
+If a key already exists for this group, it will be updated (UPSERT).
+
+Key conventions (MUST follow):
+- snake_case, English
+- Prefixes: user_, trip_, project_, person_, place_
+- Examples: user_milk_preference, trip_valencia_2026, person_mario_rossi
+- BEFORE creating a new key, use memory_list to check if one already exists for the same concept
+- Keep value brief and atomic for simple preferences. Use full sentences only for complex facts.`,
+  {
+    key: z
+      .string()
+      .describe(
+        'Stable identifier in snake_case (e.g. user_milk_preference, trip_valencia_2026)',
+      ),
+    value: z
+      .string()
+      .describe(
+        'The information to remember. Brief and atomic for preferences, descriptive for complex facts.',
+      ),
+    category: z
+      .enum(['fact', 'preference', 'person', 'event'])
+      .describe('Type of knowledge'),
+    source: z
+      .string()
+      .optional()
+      .describe(
+        'Where you learned this (e.g. "user stated", "conversation:2026-03-10")',
+      ),
+    confidence: z
+      .number()
+      .optional()
+      .default(1.0)
+      .describe(
+        '1.0=explicitly stated by user, 0.6=inferred, 0.3=hypothesis. Use 1.0 ONLY for facts the user explicitly said.',
+      ),
+    expires_at: z
+      .string()
+      .optional()
+      .describe('ISO timestamp when this becomes stale (optional)'),
+  },
+  async (args: {
+    key: string;
+    value: string;
+    category: string;
+    source?: string;
+    confidence?: number;
+    expires_at?: string;
+  }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'memory_store',
+      requestId,
+      key: args.key,
+      value: args.value,
+      category: args.category,
+      source: args.source,
+      confidence: args.confidence,
+      expiresAt: args.expires_at,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollMemoryResponse(requestId)) as {
+      success: boolean;
+      action: 'inserted' | 'updated';
+      previous_value?: string;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'Memory store timed out.' }],
+        isError: true,
+      };
+    }
+
+    const msg =
+      result.action === 'updated'
+        ? `Key "${args.key}" updated (was: "${result.previous_value}")`
+        : `Key "${args.key}" stored`;
+
+    return {
+      content: [{ type: 'text' as const, text: msg }],
+    };
+  },
+);
+
+server.tool(
+  'memory_list',
+  `List stored knowledge entries. Use to see what you remember about a topic or category.
+Use this BEFORE memory_store to check if a key already exists.`,
+  {
+    category: z
+      .string()
+      .optional()
+      .describe('Filter by category: fact, preference, person, event'),
+    prefix: z
+      .string()
+      .optional()
+      .describe(
+        'Filter keys starting with this prefix (e.g. "user_", "trip_")',
+      ),
+    only_expired: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe('Only show entries past their expires_at date (for cleanup)'),
+    limit: z.number().optional().default(50).describe('Max entries to return'),
+  },
+  async (args: {
+    category?: string;
+    prefix?: string;
+    only_expired?: boolean;
+    limit?: number;
+  }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'memory_list',
+      requestId,
+      category: args.category,
+      prefix: args.prefix,
+      onlyExpired: args.only_expired,
+      limit: args.limit,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollMemoryResponse(requestId)) as {
+      success: boolean;
+      entries: Array<{
+        key: string;
+        value: string;
+        category: string;
+        confidence: number;
+        updated_at: string;
+        expires_at: string | null;
+      }>;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'Memory list timed out.' }],
+        isError: true,
+      };
+    }
+
+    if (!result.entries || result.entries.length === 0) {
+      return {
+        content: [
+          { type: 'text' as const, text: 'No knowledge entries found.' },
+        ],
+      };
+    }
+
+    const formatted = result.entries
+      .map(
+        (e) =>
+          `- **${e.key}** [${e.category}] (confidence: ${e.confidence}): ${e.value}${e.expires_at ? ` (expires: ${e.expires_at})` : ''}`,
+      )
+      .join('\n');
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${result.entries.length} entries:\n${formatted}`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'memory_delete',
+  'Delete a knowledge entry by key. Use for cleanup of obsolete or incorrect facts.',
+  {
+    key: z.string().describe('The key to delete'),
+  },
+  async (args: { key: string }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'memory_delete',
+      requestId,
+      key: args.key,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollMemoryResponse(requestId)) as {
+      success: boolean;
+      deleted: boolean;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'Memory delete timed out.' }],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: result.deleted
+            ? `Key "${args.key}" deleted.`
+            : `Key "${args.key}" not found.`,
+        },
+      ],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
