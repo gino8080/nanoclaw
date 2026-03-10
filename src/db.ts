@@ -242,9 +242,7 @@ function migrateFts(database: Database.Database): void {
     .get() as { c: number };
   if (msgCount.c > 0) {
     logger.info({ messages: msgCount.c }, 'Rebuilding messages FTS index');
-    database.exec(
-      "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",
-    );
+    database.exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
   }
 
   const kCount = database
@@ -252,9 +250,7 @@ function migrateFts(database: Database.Database): void {
     .get() as { c: number };
   if (kCount.c > 0) {
     logger.info({ entries: kCount.c }, 'Rebuilding knowledge FTS index');
-    database.exec(
-      "INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')",
-    );
+    database.exec("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')");
   }
 
   database
@@ -1015,9 +1011,7 @@ export function listKnowledge(
 
 export function deleteKnowledge(_groupFolder: string, key: string): boolean {
   // Knowledge is not partitioned — delete by key only
-  const result = db
-    .prepare('DELETE FROM knowledge WHERE key = ?')
-    .run(key);
+  const result = db.prepare('DELETE FROM knowledge WHERE key = ?').run(key);
   return result.changes > 0;
 }
 
