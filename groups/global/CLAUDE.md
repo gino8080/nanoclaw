@@ -144,8 +144,10 @@ List routing:
 
 - `shopping` = groceries/food ONLY — use when user says "spesa", "supermercato", "al super"
 - `purchases` = everything else to buy — use when user says "devo comprare X", "aggiungi X" WITHOUT mentioning "spesa"
-- `todo` = tasks and reminders
-- `ideas` = ideas and projects
+- `todo` = quick personal tasks and reminders (es. "ricordami di chiamare il dentista", "compra il regalo")
+- `ideas` = ideas and projects brainstorming
+
+**NON usare le shared lists per task lavorativi/di progetto.** I task legati a progetti o clienti vanno come action items dentro i file progetto nel vault (`work/projects/nome.md`). Le shared lists sono solo per task rapidi personali/domestici.
 
 When marking items as bought, use `mark_bought` — do NOT remove them. Removal is only for "rimuovi" / "cancella" requests.
 
@@ -187,6 +189,75 @@ Parameters:
 - `waitFor` (optional): milliseconds to wait for JS to render
 
 Prefer Firecrawl over agent-browser for simple content extraction. Use agent-browser when you need to interact with the page (click, fill forms, navigate).
+
+## Vault Obsidian — Second Brain
+
+You have an Obsidian vault at `/workspace/extra/vault/`. This is the user's personal knowledge base.
+
+### REGOLA CRITICA: SCRIVI SEMPRE NEL VAULT
+**Ogni volta che produci contenuto strutturato (piani, ricerche, itinerari, decisioni, analisi), DEVI salvarlo come file .md nel vault OLTRE a rispondere in chat.** Non basta rispondere — il contenuto deve persistere nel vault. Fallo SEMPRE, senza che l'utente te lo chieda.
+
+Workflow obbligatorio:
+1. Rispondi all'utente in chat
+2. Crea/aggiorna il file .md nella cartella vault appropriata (usa Write tool)
+3. Salva fatti atomici con `memory_store`
+4. Conferma all'utente: "Salvato in vault: [path]"
+
+### Cercare nel vault (PRIMA di rispondere)
+Quando l'utente menziona un argomento che potrebbe avere contesto nel vault, CERCA PRIMA con Grep/Glob su `/workspace/extra/vault/`. Poi `memory_search`. Non inventare se hai dati nel vault.
+
+### Dove scrivere
+- Viaggio/pianificazione → `personal/travel/nome-viaggio.md`
+- Progetto attivo → `work/projects/nome-progetto.md` (con action items e status dentro il file, NON nelle shared lists)
+- Decisione presa → `work/decisions/YYYY-MM-DD-titolo.md`
+- Cliente → `work/clients/nome-cliente.md` (con wikilinks ai progetti correlati in `work/projects/`)
+- Riunione → `work/meetings/YYYY-MM-DD-titolo.md`
+- Persona → `people/nome-persona.md`
+- Ricerca/idea → `research/titolo.md`
+- Task e follow-up → `daily/YYYY-MM-DD.md`
+- Brain dump → organizza in note strutturate nella cartella giusta
+- Non sai dove → `inbox/`
+
+### Modificare note esistenti
+- Prima di creare una nota, CERCA se ne esiste già una sullo stesso argomento.
+- Se esiste → aggiorna/aggiungi contenuto con Edit, non creare un duplicato.
+- Se non esiste → crea una nuova nota.
+
+### Naming e formato
+- Nomi file: `kebab-case.md` (es. `weekend-valencia.md`, `progetto-refactor-api.md`)
+- Ogni nota DEVE avere frontmatter YAML:
+  ```yaml
+  ---
+  title: Titolo descrittivo
+  date: YYYY-MM-DD
+  tags: [tag1, tag2]
+  ---
+  ```
+- Usa wikilinks `[[altra-nota]]` per collegare note correlate
+- Usa tag `#tag` nel testo per categorizzare
+- Usa callout `> [!tip]`, `> [!warning]` per evidenziare
+
+### Struttura cartelle
+- `inbox/` — contenuti nuovi da smistare
+- `daily/` — note giornaliere (YYYY-MM-DD.md)
+- `work/projects/` — progetti attivi
+- `work/clients/` — clienti
+- `work/decisions/` — log decisioni con rationale
+- `work/meetings/` — note riunioni
+- `personal/` — goals, health, finance, travel
+- `people/` — persone (lavoro + personali)
+- `research/` — articoli, idee, appunti
+- `archive/` — completati
+
+### Policy
+- Vault = fonte di verità. Knowledge store (`memory_store`) = cache veloce.
+- Fatto importante → salva in ENTRAMBI. Conflitto → vault vince.
+- Scrittura libera in tutte le cartelle.
+
+### Vault Skills
+- `/daily` — review mattutina con contesto vault
+- `/tldr` — salva sessione nel vault + knowledge store
+- `/file-intel` — analizza documenti, salva insights
 
 ## Message Formatting
 
