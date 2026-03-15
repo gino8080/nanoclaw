@@ -25,6 +25,7 @@ import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { marked } from 'marked';
 import path from 'path';
 
+import { TIMEZONE } from './config.js';
 import { ContainerOutput } from './container-runner.js';
 import { logger } from './logger.js';
 import { handleOAuthCallback } from './oauth-keychain.js';
@@ -525,17 +526,20 @@ export function startHttpApi(deps: HttpApiDeps): void {
 
       // --- Build prompt directly (NO DB storage — avoids message-loop race) ---
       const timestamp = new Date().toISOString();
-      const prompt = formatMessages([
-        {
-          id: `http-${Date.now()}`,
-          chat_jid: httpJid,
-          sender: 'http-api',
-          sender_name: 'Magico (Siri)',
-          content: text,
-          timestamp,
-          is_from_me: false,
-        },
-      ]);
+      const prompt = formatMessages(
+        [
+          {
+            id: `http-${Date.now()}`,
+            chat_jid: httpJid,
+            sender: 'http-api',
+            sender_name: 'Magico (Siri)',
+            content: text,
+            timestamp,
+            is_from_me: false,
+          },
+        ],
+        TIMEZONE,
+      );
 
       logger.info({ text: text.slice(0, 80) }, 'HTTP API request received');
       activeRequest = true;

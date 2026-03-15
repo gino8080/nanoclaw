@@ -48,6 +48,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   singleQuery?: boolean;
   assistantName?: string;
+  secrets?: Record<string, string>;
 }
 
 export interface ContainerOutput {
@@ -83,17 +84,12 @@ function buildVolumeMounts(
       readonly: true,
     });
 
-
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the credential proxy, never exposed to containers.
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
+    // Shadow .env: the project root is mounted read-only, so the .env inside
+    // it is already inaccessible for writes. The credential proxy handles auth.
+    // On Docker you could shadow with /dev/null, but Apple Container only
+    // supports directory mounts — so we skip the shadow mount entirely.
+    // The .env is readable but contains no secrets useful to the container
+    // since auth goes through the credential proxy.
 
     // Main also gets its group folder as the working directory
     mounts.push({

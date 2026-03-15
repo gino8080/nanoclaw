@@ -11,8 +11,10 @@ import { logger } from './logger.js';
 /** The container runtime binary name. */
 export const CONTAINER_RUNTIME_BIN = 'container';
 
-/** Hostname containers use to reach the host machine. */
-export const CONTAINER_HOST_GATEWAY = 'host.docker.internal';
+/** Hostname/IP containers use to reach the host machine. */
+// Apple Container doesn't inject host.docker.internal — use the bridge gateway IP.
+export const CONTAINER_HOST_GATEWAY =
+  os.platform() === 'darwin' ? '192.168.64.1' : 'host.docker.internal';
 
 /**
  * Address the credential proxy binds to.
@@ -24,7 +26,10 @@ export const PROXY_BIND_HOST =
   process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
 
 function detectProxyBindHost(): string {
-  if (os.platform() === 'darwin') return '127.0.0.1';
+  // Apple Container uses a bridged network — containers reach the host via
+  // the gateway IP (e.g. 192.168.64.1), not loopback. Bind on 0.0.0.0 so
+  // the proxy is reachable from the container VM.
+  if (os.platform() === 'darwin') return '0.0.0.0';
 
   // WSL uses Docker Desktop (same VM routing as macOS) — loopback is correct.
   // Check /proc filesystem, not env vars — WSL_DISTRO_NAME isn't set under systemd.
