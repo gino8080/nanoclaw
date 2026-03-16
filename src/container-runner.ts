@@ -334,10 +334,7 @@ function buildContainerArgs(
 
   // Pass all git credentials as JSON for the credential helper
   if (gitCredentials.length > 0) {
-    args.push(
-      '-e',
-      `GIT_CREDENTIALS=${JSON.stringify(gitCredentials)}`,
-    );
+    args.push('-e', `GIT_CREDENTIALS=${JSON.stringify(gitCredentials)}`);
   }
 
   // Runtime-specific args for host gateway resolution
