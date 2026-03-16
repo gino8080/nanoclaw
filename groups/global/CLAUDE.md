@@ -195,18 +195,22 @@ Prefer Firecrawl over agent-browser for simple content extraction. Use agent-bro
 You have an Obsidian vault at `/workspace/extra/vault/`. This is the user's personal knowledge base.
 
 ### REGOLA CRITICA: SCRIVI SEMPRE NEL VAULT
+
 **Ogni volta che produci contenuto strutturato (piani, ricerche, itinerari, decisioni, analisi), DEVI salvarlo come file .md nel vault OLTRE a rispondere in chat.** Non basta rispondere — il contenuto deve persistere nel vault. Fallo SEMPRE, senza che l'utente te lo chieda.
 
 Workflow obbligatorio:
+
 1. Rispondi all'utente in chat
 2. Crea/aggiorna il file .md nella cartella vault appropriata (usa Write tool)
 3. Salva fatti atomici con `memory_store`
 4. Conferma all'utente: "Salvato in vault: [path]"
 
 ### Cercare nel vault (PRIMA di rispondere)
+
 Quando l'utente menziona un argomento che potrebbe avere contesto nel vault, CERCA PRIMA con Grep/Glob su `/workspace/extra/vault/`. Poi `memory_search`. Non inventare se hai dati nel vault.
 
 ### Dove scrivere
+
 - Viaggio/pianificazione → `personal/travel/nome-viaggio.md`
 - Progetto attivo → `work/projects/nome-progetto.md` (con action items e status dentro il file, NON nelle shared lists)
 - Decisione presa → `work/decisions/YYYY-MM-DD-titolo.md`
@@ -219,11 +223,13 @@ Quando l'utente menziona un argomento che potrebbe avere contesto nel vault, CER
 - Non sai dove → `inbox/`
 
 ### Modificare note esistenti
+
 - Prima di creare una nota, CERCA se ne esiste già una sullo stesso argomento.
 - Se esiste → aggiorna/aggiungi contenuto con Edit, non creare un duplicato.
 - Se non esiste → crea una nuova nota.
 
 ### Naming e formato
+
 - Nomi file: `kebab-case.md` (es. `weekend-valencia.md`, `progetto-refactor-api.md`)
 - Ogni nota DEVE avere frontmatter YAML:
   ```yaml
@@ -238,6 +244,7 @@ Quando l'utente menziona un argomento che potrebbe avere contesto nel vault, CER
 - Usa callout `> [!tip]`, `> [!warning]` per evidenziare
 
 ### Struttura cartelle
+
 - `inbox/` — contenuti nuovi da smistare
 - `daily/` — note giornaliere (YYYY-MM-DD.md)
 - `work/projects/` — progetti attivi
@@ -250,14 +257,29 @@ Quando l'utente menziona un argomento che potrebbe avere contesto nel vault, CER
 - `archive/` — completati
 
 ### Policy
+
 - Vault = fonte di verità. Knowledge store (`memory_store`) = cache veloce.
 - Fatto importante → salva in ENTRAMBI. Conflitto → vault vince.
 - Scrittura libera in tutte le cartelle.
 
 ### Vault Skills
+
 - `/daily` — review mattutina con contesto vault
 - `/tldr` — salva sessione nel vault + knowledge store
 - `/file-intel` — analizza documenti, salva insights
+
+## Project Management Tools
+
+You have tools to manage development projects from the host:
+
+| Tool                      | Use for                                                      |
+| ------------------------- | ------------------------------------------------------------ |
+| `list_available_projects` | See projects available under ~/PROJECTS                      |
+| `mount_project`           | Mount a project into the container (read-write or read-only) |
+| `unmount_project`         | Remove a mounted project                                     |
+| `spawn_claude_session`    | Start a Claude Code session on the host for complex tasks    |
+
+Use `/mount-project` for the interactive workflow. Projects mount at `/workspace/extra/{name}`.
 
 ## Message Formatting
 

@@ -722,18 +722,32 @@ server.tool(
   {
     task_id: z.string().describe('The task ID to update'),
     prompt: z.string().optional().describe('New prompt for the task'),
-    schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
-    schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
+    schedule_type: z
+      .enum(['cron', 'interval', 'once'])
+      .optional()
+      .describe('New schedule type'),
+    schedule_value: z
+      .string()
+      .optional()
+      .describe('New schedule value (see schedule_task for format)'),
   },
   async (args) => {
     // Validate schedule_value if provided
-    if (args.schedule_type === 'cron' || (!args.schedule_type && args.schedule_value)) {
+    if (
+      args.schedule_type === 'cron' ||
+      (!args.schedule_type && args.schedule_value)
+    ) {
       if (args.schedule_value) {
         try {
           CronExpressionParser.parse(args.schedule_value);
         } catch {
           return {
-            content: [{ type: 'text' as const, text: `Invalid cron: "${args.schedule_value}".` }],
+            content: [
+              {
+                type: 'text' as const,
+                text: `Invalid cron: "${args.schedule_value}".`,
+              },
+            ],
             isError: true,
           };
         }
@@ -743,7 +757,12 @@ server.tool(
       const ms = parseInt(args.schedule_value, 10);
       if (isNaN(ms) || ms <= 0) {
         return {
-          content: [{ type: 'text' as const, text: `Invalid interval: "${args.schedule_value}".` }],
+          content: [
+            {
+              type: 'text' as const,
+              text: `Invalid interval: "${args.schedule_value}".`,
+            },
+          ],
           isError: true,
         };
       }
@@ -757,12 +776,21 @@ server.tool(
       timestamp: new Date().toISOString(),
     };
     if (args.prompt !== undefined) data.prompt = args.prompt;
-    if (args.schedule_type !== undefined) data.schedule_type = args.schedule_type;
-    if (args.schedule_value !== undefined) data.schedule_value = args.schedule_value;
+    if (args.schedule_type !== undefined)
+      data.schedule_type = args.schedule_type;
+    if (args.schedule_value !== undefined)
+      data.schedule_value = args.schedule_value;
 
     writeIpcFile(TASKS_DIR, data);
 
-    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} update requested.` }] };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Task ${args.task_id} update requested.`,
+        },
+      ],
+    };
   },
 );
 
@@ -1420,6 +1448,350 @@ server.tool(
           text: result.deleted
             ? `Key "${args.key}" deleted.`
             : `Key "${args.key}" not found.`,
+        },
+      ],
+    };
+  },
+);
+
+// --- Project management tools ---
+
+async function pollProjectResponse(
+  responseType: string,
+  requestId: string,
+  timeoutMs = 10000,
+): Promise<unknown> {
+  const responsePath = path.join(IPC_DIR, responseType, `${requestId}.json`);
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (fs.existsSync(responsePath)) {
+      try {
+        const result = JSON.parse(fs.readFileSync(responsePath, 'utf-8'));
+        fs.unlinkSync(responsePath);
+        return result;
+      } catch {
+        // File might be partially written, retry
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return null;
+}
+
+server.tool(
+  'list_available_projects',
+  `List projects available to mount from the host filesystem.
+Shows all projects under ~/PROJECTS with git status and CLAUDE.md presence.
+Use this to discover which projects can be mounted with mount_project.`,
+  {
+    root_path: z
+      .string()
+      .optional()
+      .describe(
+        'Root directory to scan (default: ~/PROJECTS). Must be in the mount allowlist.',
+      ),
+  },
+  async (args: { root_path?: string }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'list_projects',
+      requestId,
+      rootPath: args.root_path || '~/PROJECTS',
+      groupFolder,
+      chatJid,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollProjectResponse(
+      'project_responses',
+      requestId,
+    )) as {
+      success: boolean;
+      error?: string;
+      root?: string;
+      projects?: Array<{
+        name: string;
+        path: string;
+        hasGit: boolean;
+        hasClaude: boolean;
+        lastCommit?: string;
+      }>;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'List projects timed out.' }],
+        isError: true,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${result.error}` }],
+        isError: true,
+      };
+    }
+
+    if (!result.projects || result.projects.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `No projects found under ${result.root}`,
+          },
+        ],
+      };
+    }
+
+    const formatted = result.projects
+      .map(
+        (p) =>
+          `- ${p.name}${p.hasGit ? ' [git]' : ''}${p.hasClaude ? ' [CLAUDE.md]' : ''}${p.lastCommit ? ` (last: ${p.lastCommit.split(' ')[0]})` : ''}`,
+      )
+      .join('\n');
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${result.projects.length} projects under ${result.root}:\n${formatted}`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'mount_project',
+  `Mount a project from the host filesystem into this container.
+The project will be available at /workspace/extra/{name}.
+The container restarts automatically after mounting — your next message will have access.
+Use list_available_projects first to see available projects.`,
+  {
+    project_path: z
+      .string()
+      .describe(
+        'Absolute path or ~/relative path to the project on the host (e.g., ~/PROJECTS/PERSONAL/my-app)',
+      ),
+    readonly: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe('Mount read-only (default: false, read-write)'),
+    container_path: z
+      .string()
+      .optional()
+      .describe(
+        'Custom name for the mount point (default: derived from project folder name)',
+      ),
+  },
+  async (args: {
+    project_path: string;
+    readonly?: boolean;
+    container_path?: string;
+  }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'mount_project',
+      requestId,
+      projectPath: args.project_path,
+      containerPath: args.container_path,
+      readonly: args.readonly ?? false,
+      groupJid: chatJid,
+      chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollProjectResponse(
+      'mount_responses',
+      requestId,
+    )) as {
+      success: boolean;
+      error?: string;
+      containerPath?: string;
+      readonly?: boolean;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'Mount project timed out.' }],
+        isError: true,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        content: [
+          { type: 'text' as const, text: `Mount failed: ${result.error}` },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Project mounted at ${result.containerPath} (${result.readonly ? 'read-only' : 'read-write'}). Container will restart — the project will be available on your next message.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'unmount_project',
+  `Remove a mounted project from this container.
+The container restarts automatically after unmounting.`,
+  {
+    container_path: z
+      .string()
+      .describe(
+        'The container path name to unmount (e.g., "my-app" — the part after /workspace/extra/)',
+      ),
+  },
+  async (args: { container_path: string }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'unmount_project',
+      requestId,
+      containerPath: args.container_path,
+      groupJid: chatJid,
+      chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollProjectResponse(
+      'unmount_responses',
+      requestId,
+    )) as {
+      success: boolean;
+      error?: string;
+      removed?: string;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [
+          { type: 'text' as const, text: 'Unmount project timed out.' },
+        ],
+        isError: true,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Unmount failed: ${result.error}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Project "${result.removed}" unmounted. Container will restart.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'spawn_claude_session',
+  `Spawn a Claude Code session on the host for complex development tasks.
+The session runs directly on the host filesystem (not in a container).
+Use this when the task requires: multi-file refactoring, complex debugging,
+architectural decisions, or when the user wants to monitor the work.
+
+The user can connect to the session from their phone/desktop.
+The session runs independently until the user or a timeout closes it.`,
+  {
+    project_path: z
+      .string()
+      .describe(
+        'Path to the project on the host (e.g., ~/PROJECTS/PERSONAL/my-app)',
+      ),
+    task_description: z
+      .string()
+      .optional()
+      .describe('Description of the task for context'),
+    session_name: z
+      .string()
+      .optional()
+      .describe('Custom session name (default: auto-generated)'),
+  },
+  async (args: {
+    project_path: string;
+    task_description?: string;
+    session_name?: string;
+  }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'spawn_claude_session',
+      requestId,
+      projectPath: args.project_path,
+      name: args.session_name,
+      taskDescription: args.task_description,
+      groupFolder,
+      chatJid,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollProjectResponse(
+      'session_responses',
+      requestId,
+    )) as {
+      success: boolean;
+      error?: string;
+      pid?: number;
+      sessionName?: string;
+      projectPath?: string;
+      message?: string;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Spawn Claude session timed out.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Session spawn failed: ${result.error}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text:
+            result.message ||
+            `Claude Code session started (PID: ${result.pid}).`,
         },
       ],
     };

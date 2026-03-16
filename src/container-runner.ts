@@ -15,6 +15,8 @@ import {
   CONTAINER_WATCHDOG_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
+  GIT_TOKENS_DIR,
+  GITHUB_TOKEN_PATH,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   TIMEZONE,
@@ -279,6 +281,63 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Git tokens for multi-host authentication (push, PR via gh/glab CLI)
+  // Reads from ~/.config/nanoclaw/git-tokens/{hostname} files.
+  // Falls back to legacy ~/.config/nanoclaw/.github-token for GitHub.
+  const gitCredentials: Array<{ host: string; token: string }> = [];
+  try {
+    if (fs.existsSync(GIT_TOKENS_DIR)) {
+      for (const file of fs.readdirSync(GIT_TOKENS_DIR)) {
+        if (file.startsWith('.')) continue;
+        const token = fs
+          .readFileSync(path.join(GIT_TOKENS_DIR, file), 'utf-8')
+          .trim();
+        if (token) gitCredentials.push({ host: file, token });
+      }
+    }
+    // Legacy fallback: single .github-token file
+    if (
+      !gitCredentials.some((c) => c.host === 'github.com') &&
+      fs.existsSync(GITHUB_TOKEN_PATH)
+    ) {
+      const ghToken = fs.readFileSync(GITHUB_TOKEN_PATH, 'utf-8').trim();
+      if (ghToken) gitCredentials.push({ host: 'github.com', token: ghToken });
+    }
+  } catch {
+    logger.debug('Git tokens not found or unreadable, skipping');
+  }
+
+  // Pass GitHub token as env var for gh CLI (it requires GH_TOKEN env)
+  const ghCred = gitCredentials.find((c) => c.host === 'github.com');
+  if (ghCred) {
+    args.push('-e', `GITHUB_TOKEN=${ghCred.token}`);
+    args.push('-e', `GH_TOKEN=${ghCred.token}`);
+  }
+
+  // Pass GitLab tokens as env vars for glab CLI
+  // glab uses GITLAB_TOKEN — if multiple GitLab hosts, use GITLAB_HOST to set default
+  const gitlabCreds = gitCredentials.filter(
+    (c) => c.host !== 'github.com' && c.host.includes('gitlab'),
+  );
+  if (gitlabCreds.length > 0) {
+    // Use the first GitLab token as default GITLAB_TOKEN
+    args.push('-e', `GITLAB_TOKEN=${gitlabCreds[0].token}`);
+    args.push('-e', `GITLAB_HOST=https://${gitlabCreds[0].host}`);
+    // Pass all GitLab host configs for glab multi-instance
+    for (const cred of gitlabCreds) {
+      const envKey = `GITLAB_TOKEN_${cred.host.replace(/[.-]/g, '_').toUpperCase()}`;
+      args.push('-e', `${envKey}=${cred.token}`);
+    }
+  }
+
+  // Pass all git credentials as JSON for the credential helper
+  if (gitCredentials.length > 0) {
+    args.push(
+      '-e',
+      `GIT_CREDENTIALS=${JSON.stringify(gitCredentials)}`,
+    );
   }
 
   // Runtime-specific args for host gateway resolution

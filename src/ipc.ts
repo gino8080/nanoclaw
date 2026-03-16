@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
@@ -14,18 +15,21 @@ import {
   createTask,
   deleteTask,
   deleteKnowledge,
+  getRegisteredGroup,
   getTaskById,
   listKnowledge,
   searchKnowledge,
   searchMessages,
   searchMessagesFts,
+  setRegisteredGroup,
   updateTask,
   upsertKnowledge,
 } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { processListOperation } from './lists.js';
 import { logger } from './logger.js';
-import { RegisteredGroup } from './types.js';
+import { validateMount } from './mount-security.js';
+import { AdditionalMount, RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
@@ -46,6 +50,7 @@ export interface IpcDeps {
     availableGroups: AvailableGroup[],
     registeredJids: Set<string>,
   ) => void;
+  stopGroup?: (groupJid: string) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -278,6 +283,23 @@ export function startIpcWatcher(deps: IpcDeps): void {
   logger.info('IPC watcher started (per-group namespaces)');
 }
 
+/**
+ * Write an IPC response file for the container to poll.
+ */
+function writeIpcResponse(
+  sourceGroup: string,
+  responseType: string,
+  requestId: string,
+  data: unknown,
+): void {
+  const responseDir = path.join(DATA_DIR, 'ipc', sourceGroup, responseType);
+  fs.mkdirSync(responseDir, { recursive: true });
+  const responsePath = path.join(responseDir, `${requestId}.json`);
+  const tmpPath = `${responsePath}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data));
+  fs.renameSync(tmpPath, responsePath);
+}
+
 export async function processTaskIpc(
   data: {
     type: string;
@@ -319,6 +341,13 @@ export async function processTaskIpc(
     // For memory_list
     prefix?: string;
     onlyExpired?: boolean;
+    // For mount_project / unmount_project
+    projectPath?: string;
+    containerPath?: string;
+    readonly?: boolean;
+    groupJid?: string;
+    // For list_projects
+    rootPath?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -875,6 +904,390 @@ export async function processTaskIpc(
           sourceGroup,
         },
         'Memory delete processed',
+      );
+      break;
+    }
+
+    case 'mount_project': {
+      if (!data.requestId || !data.projectPath) {
+        logger.warn({ data }, 'Invalid mount_project request');
+        break;
+      }
+
+      // Determine the target group JID for mount modification
+      const mountTargetJid = data.groupJid || data.chatJid;
+      if (!mountTargetJid) {
+        writeIpcResponse(sourceGroup, 'mount_responses', data.requestId, {
+          success: false,
+          error: 'No target group JID specified',
+        });
+        break;
+      }
+
+      // Authorization: non-main can only mount for themselves
+      const mountTargetGroup = registeredGroups[mountTargetJid];
+      if (!mountTargetGroup) {
+        writeIpcResponse(sourceGroup, 'mount_responses', data.requestId, {
+          success: false,
+          error: 'Target group not registered',
+        });
+        break;
+      }
+      if (!isMain && mountTargetGroup.folder !== sourceGroup) {
+        writeIpcResponse(sourceGroup, 'mount_responses', data.requestId, {
+          success: false,
+          error: 'Unauthorized: can only mount for own group',
+        });
+        break;
+      }
+
+      const mountDef: AdditionalMount = {
+        hostPath: data.projectPath,
+        containerPath: data.containerPath,
+        readonly: data.readonly ?? false,
+      };
+
+      // Validate against allowlist
+      const mountResult = validateMount(
+        mountDef,
+        mountTargetGroup.isMain ?? false,
+      );
+      if (!mountResult.allowed) {
+        writeIpcResponse(sourceGroup, 'mount_responses', data.requestId, {
+          success: false,
+          error: mountResult.reason,
+        });
+        break;
+      }
+
+      // Update containerConfig in DB
+      const existingGroup = getRegisteredGroup(mountTargetJid);
+      if (!existingGroup) {
+        writeIpcResponse(sourceGroup, 'mount_responses', data.requestId, {
+          success: false,
+          error: 'Group not found in DB',
+        });
+        break;
+      }
+
+      const existingMounts =
+        existingGroup.containerConfig?.additionalMounts || [];
+
+      // Check if already mounted at this container path
+      const resolvedCp = mountResult.resolvedContainerPath!;
+      const alreadyMounted = existingMounts.some(
+        (m) => (m.containerPath || path.basename(m.hostPath)) === resolvedCp,
+      );
+      if (alreadyMounted) {
+        writeIpcResponse(sourceGroup, 'mount_responses', data.requestId, {
+          success: false,
+          error: `Already mounted at /workspace/extra/${resolvedCp}`,
+        });
+        break;
+      }
+
+      const updatedMounts = [...existingMounts, mountDef];
+      setRegisteredGroup(mountTargetJid, {
+        ...existingGroup,
+        containerConfig: {
+          ...existingGroup.containerConfig,
+          additionalMounts: updatedMounts,
+        },
+      });
+
+      // Stop the container so next query recreates it with new mounts
+      if (deps.stopGroup) {
+        deps.stopGroup(mountTargetJid);
+      }
+
+      writeIpcResponse(sourceGroup, 'mount_responses', data.requestId, {
+        success: true,
+        containerPath: `/workspace/extra/${resolvedCp}`,
+        readonly: mountResult.effectiveReadonly,
+      });
+
+      logger.info(
+        {
+          sourceGroup,
+          targetJid: mountTargetJid,
+          projectPath: data.projectPath,
+          containerPath: resolvedCp,
+        },
+        'Project mounted via IPC',
+      );
+      break;
+    }
+
+    case 'unmount_project': {
+      if (!data.requestId || !data.containerPath) {
+        logger.warn({ data }, 'Invalid unmount_project request');
+        break;
+      }
+
+      const unmountTargetJid = data.groupJid || data.chatJid;
+      if (!unmountTargetJid) {
+        writeIpcResponse(sourceGroup, 'unmount_responses', data.requestId, {
+          success: false,
+          error: 'No target group JID specified',
+        });
+        break;
+      }
+
+      const unmountTargetGroup = registeredGroups[unmountTargetJid];
+      if (!unmountTargetGroup) {
+        writeIpcResponse(sourceGroup, 'unmount_responses', data.requestId, {
+          success: false,
+          error: 'Target group not registered',
+        });
+        break;
+      }
+      if (!isMain && unmountTargetGroup.folder !== sourceGroup) {
+        writeIpcResponse(sourceGroup, 'unmount_responses', data.requestId, {
+          success: false,
+          error: 'Unauthorized: can only unmount from own group',
+        });
+        break;
+      }
+
+      const unmountExisting = getRegisteredGroup(unmountTargetJid);
+      if (!unmountExisting) {
+        writeIpcResponse(sourceGroup, 'unmount_responses', data.requestId, {
+          success: false,
+          error: 'Group not found in DB',
+        });
+        break;
+      }
+
+      const currentMounts =
+        unmountExisting.containerConfig?.additionalMounts || [];
+      const targetCp = data.containerPath;
+      const filtered = currentMounts.filter(
+        (m) => (m.containerPath || path.basename(m.hostPath)) !== targetCp,
+      );
+
+      if (filtered.length === currentMounts.length) {
+        writeIpcResponse(sourceGroup, 'unmount_responses', data.requestId, {
+          success: false,
+          error: `No mount found with containerPath "${targetCp}"`,
+        });
+        break;
+      }
+
+      setRegisteredGroup(unmountTargetJid, {
+        ...unmountExisting,
+        containerConfig: {
+          ...unmountExisting.containerConfig,
+          additionalMounts: filtered,
+        },
+      });
+
+      if (deps.stopGroup) {
+        deps.stopGroup(unmountTargetJid);
+      }
+
+      writeIpcResponse(sourceGroup, 'unmount_responses', data.requestId, {
+        success: true,
+        removed: targetCp,
+      });
+
+      logger.info(
+        { sourceGroup, targetJid: unmountTargetJid, containerPath: targetCp },
+        'Project unmounted via IPC',
+      );
+      break;
+    }
+
+    case 'spawn_claude_session': {
+      if (!data.requestId || !data.projectPath) {
+        logger.warn({ data }, 'Invalid spawn_claude_session request');
+        break;
+      }
+
+      // Validate the project path against allowlist
+      const sessionMount: AdditionalMount = {
+        hostPath: data.projectPath,
+        readonly: true,
+      };
+      const sessionCheck = validateMount(sessionMount, isMain);
+      if (!sessionCheck.allowed) {
+        writeIpcResponse(sourceGroup, 'session_responses', data.requestId, {
+          success: false,
+          error: `Path not allowed: ${sessionCheck.reason}`,
+        });
+        break;
+      }
+
+      // Expand ~ for the actual spawn
+      const sessionProjectPath = data.projectPath.startsWith('~/')
+        ? path.join(process.env.HOME || os.homedir(), data.projectPath.slice(2))
+        : data.projectPath;
+
+      try {
+        const { spawn: spawnProcess } = await import('child_process');
+        const sessionName =
+          data.name ||
+          `nanoclaw-${path.basename(sessionProjectPath)}-${Date.now()}`;
+
+        const ccProcess = spawnProcess(
+          'claude',
+          ['--dangerously-skip-permissions'],
+          {
+            cwd: sessionProjectPath,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            detached: true,
+            env: {
+              ...process.env,
+              CLAUDE_CODE_SESSION_NAME: sessionName,
+            },
+          },
+        );
+
+        // Detach so the process survives NanoClaw restarts
+        ccProcess.unref();
+
+        // Give it a moment to start, then capture the PID
+        const pid = ccProcess.pid;
+
+        writeIpcResponse(sourceGroup, 'session_responses', data.requestId, {
+          success: true,
+          pid,
+          sessionName,
+          projectPath: sessionProjectPath,
+          message: `Claude Code session started (PID: ${pid}) in ${sessionProjectPath}`,
+        });
+
+        logger.info(
+          {
+            sourceGroup,
+            pid,
+            sessionName,
+            projectPath: sessionProjectPath,
+          },
+          'Claude Code session spawned via IPC',
+        );
+      } catch (err) {
+        writeIpcResponse(sourceGroup, 'session_responses', data.requestId, {
+          success: false,
+          error: `Failed to spawn session: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+      break;
+    }
+
+    case 'list_projects': {
+      if (!data.requestId) {
+        logger.warn({ data }, 'Invalid list_projects request');
+        break;
+      }
+
+      const rootPath = data.rootPath || '~/PROJECTS';
+      const expandedRoot = rootPath.startsWith('~/')
+        ? path.join(process.env.HOME || os.homedir(), rootPath.slice(2))
+        : rootPath;
+
+      // Validate root is in allowlist
+      const testMount: AdditionalMount = {
+        hostPath: expandedRoot,
+        readonly: true,
+      };
+      const rootCheck = validateMount(testMount, isMain);
+      if (!rootCheck.allowed) {
+        writeIpcResponse(sourceGroup, 'project_responses', data.requestId, {
+          success: false,
+          error: `Root path not allowed: ${rootCheck.reason}`,
+        });
+        break;
+      }
+
+      const projects: Array<{
+        name: string;
+        path: string;
+        hasGit: boolean;
+        hasClaude: boolean;
+        lastCommit?: string;
+      }> = [];
+
+      try {
+        // Scan subdirectories recursively (2 levels: category/project)
+        const categories = fs.readdirSync(expandedRoot).filter((f) => {
+          try {
+            return (
+              !f.startsWith('.') &&
+              fs.statSync(path.join(expandedRoot, f)).isDirectory()
+            );
+          } catch {
+            return false;
+          }
+        });
+
+        for (const category of categories) {
+          const categoryPath = path.join(expandedRoot, category);
+          let entries: string[];
+          try {
+            entries = fs.readdirSync(categoryPath);
+          } catch {
+            continue;
+          }
+
+          for (const entry of entries) {
+            if (entry.startsWith('.')) continue;
+            const entryPath = path.join(categoryPath, entry);
+            try {
+              if (!fs.statSync(entryPath).isDirectory()) continue;
+            } catch {
+              continue;
+            }
+
+            const hasGit = fs.existsSync(path.join(entryPath, '.git'));
+            const hasClaude = fs.existsSync(path.join(entryPath, 'CLAUDE.md'));
+
+            const project: (typeof projects)[number] = {
+              name: `${category}/${entry}`,
+              path: entryPath,
+              hasGit,
+              hasClaude,
+            };
+
+            // Get last commit date if git repo
+            if (hasGit) {
+              try {
+                const { execSync } = await import('child_process');
+                const lastCommit = execSync(
+                  'git log -1 --format=%ci 2>/dev/null || echo ""',
+                  { cwd: entryPath, timeout: 5000 },
+                )
+                  .toString()
+                  .trim();
+                if (lastCommit) project.lastCommit = lastCommit;
+              } catch {
+                // Ignore git errors
+              }
+            }
+
+            projects.push(project);
+          }
+        }
+      } catch (err) {
+        writeIpcResponse(sourceGroup, 'project_responses', data.requestId, {
+          success: false,
+          error: `Failed to scan projects: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        break;
+      }
+
+      writeIpcResponse(sourceGroup, 'project_responses', data.requestId, {
+        success: true,
+        root: expandedRoot,
+        projects,
+      });
+
+      logger.info(
+        {
+          sourceGroup,
+          rootPath: expandedRoot,
+          projectCount: projects.length,
+        },
+        'Project list generated via IPC',
       );
       break;
     }

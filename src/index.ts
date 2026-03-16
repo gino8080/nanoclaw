@@ -69,6 +69,18 @@ let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
+
+/**
+ * Build trigger regex for a specific group.
+ * Uses the group's trigger_pattern if set, otherwise falls back to global.
+ */
+function getGroupTriggerPattern(group: RegisteredGroup): RegExp {
+  if (group.trigger) {
+    const escaped = group.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^${escaped}\\b`, 'i');
+  }
+  return TRIGGER_PATTERN;
+}
 let messageLoopRunning = false;
 const consecutiveFailures: Record<string, number> = {};
 const SESSION_RESET_THRESHOLD = 3;
@@ -176,10 +188,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
+    const groupTrigger = getGroupTriggerPattern(group);
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
       (m) =>
-        TRIGGER_PATTERN.test(m.content.trim()) &&
+        (groupTrigger.test(m.content.trim()) ||
+          TRIGGER_PATTERN.test(m.content.trim())) &&
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
     if (!hasTrigger) return true;
@@ -484,10 +498,12 @@ async function startMessageLoop(): Promise<void> {
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
+            const groupTrigger = getGroupTriggerPattern(group);
             const allowlistCfg = loadSenderAllowlist();
             const hasTrigger = groupMessages.some(
               (m) =>
-                TRIGGER_PATTERN.test(m.content.trim()) &&
+                (groupTrigger.test(m.content.trim()) ||
+                  TRIGGER_PATTERN.test(m.content.trim())) &&
                 (m.is_from_me ||
                   isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
             );
@@ -735,6 +751,7 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
+    stopGroup: (groupJid: string) => queue.stopGroup(groupJid),
   });
   // HTTP API for Siri Shortcuts integration (iPhone → Jarvis without opening Telegram)
   startHttpApi({
