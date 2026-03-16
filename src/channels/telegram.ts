@@ -161,8 +161,19 @@ export class TelegramChannel implements Channel {
     }
 
     this.bot.on('message:text', async (ctx) => {
-      // Skip commands
-      if (ctx.message.text.startsWith('/')) return;
+      // Skip built-in bot commands (handled by bot.command() handlers above)
+      // but allow skill slash commands (/daily, /tldr, etc.) to reach the agent
+      const builtinCommands = [
+        '/start',
+        '/ping',
+        '/help',
+        '/chatid',
+        '/reset',
+        '/register',
+        '/login',
+      ];
+      const cmd = ctx.message.text.split(/\s/)[0].split('@')[0].toLowerCase();
+      if (builtinCommands.includes(cmd)) return;
 
       const chatJid = `tg:${ctx.chat.id}`;
       let content = ctx.message.text;
