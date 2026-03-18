@@ -28,6 +28,7 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   singleQuery?: boolean;
   assistantName?: string;
+  secrets?: Record<string, string>;
 }
 
 interface ContainerOutput {
@@ -419,6 +420,7 @@ async function runQuery(
         'mcp__gmail__list_email_labels',
         'mcp__gmail__download_attachment',
         'mcp__googlemaps__*',
+        'mcp__gcalendar__*',
         'mcp__firecrawl__*',
       ],
       env: sdkEnv,
@@ -447,6 +449,15 @@ async function runQuery(
             args: [path.join(path.dirname(mcpServerPath), 'googlemaps-mcp.js')],
             env: {
               GOOGLE_MAPS_API_KEY: sdkEnv.GOOGLE_MAPS_API_KEY,
+            },
+          },
+        } : {}),
+        ...(sdkEnv.NANOCLAW_CALENDAR_ID ? {
+          gcalendar: {
+            command: 'node',
+            args: [path.join(path.dirname(mcpServerPath), 'gcalendar-mcp.js')],
+            env: {
+              NANOCLAW_CALENDAR_ID: sdkEnv.NANOCLAW_CALENDAR_ID,
             },
           },
         } : {}),
@@ -517,9 +528,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.
-  // No real secrets exist in the container environment.
-  const sdkEnv: Record<string, string | undefined> = { ...process.env };
+  // Merge host-provided secrets (passed via stdin) into the SDK environment.
+  // These are non-Anthropic secrets (API keys for Maps, Calendar, etc.)
+  // that the host reads from .env and injects into the container input.
+  const sdkEnv: Record<string, string | undefined> = {
+    ...process.env,
+    ...containerInput.secrets,
+  };
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');

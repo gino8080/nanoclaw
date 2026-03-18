@@ -57,7 +57,11 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
-import { isTokenExpiringSoon, refreshAndCacheToken } from './oauth-keychain.js';
+import {
+  getCachedToken,
+  isTokenExpiringSoon,
+  refreshAndCacheToken,
+} from './oauth-keychain.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -84,6 +88,7 @@ function getGroupTriggerPattern(group: RegisteredGroup): RegExp {
 let messageLoopRunning = false;
 const consecutiveFailures: Record<string, number> = {};
 const SESSION_RESET_THRESHOLD = 3;
+let lastAuthWarningAt = 0;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -384,6 +389,25 @@ async function runAgent(
         { message: refreshResult.message },
         'Pre-invocation OAuth refresh failed',
       );
+
+      // No valid token at all — skip container to avoid pointless timeout
+      if (!getCachedToken()) {
+        logger.error('No valid OAuth token available — skipping container');
+        const now = Date.now();
+        if (now - lastAuthWarningAt > 5 * 60 * 1000) {
+          lastAuthWarningAt = now;
+          const channel = channels.find(
+            (c) => c.ownsJid(chatJid) && c.isConnected(),
+          );
+          channel
+            ?.sendMessage(
+              chatJid,
+              '⚠️ Token OAuth scaduto e refresh fallito. Usa /login per rinnovarlo.',
+            )
+            .catch(() => {});
+        }
+        return 'error';
+      }
     }
   }
 

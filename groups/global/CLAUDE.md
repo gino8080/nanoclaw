@@ -174,6 +174,49 @@ Tips:
 - Combine with HTML pages: search places → generate an interactive Leaflet map with results → share the link.
 - `place_details` returns reviews and opening hours — use it when the user wants to compare or choose.
 
+## Google Calendar
+
+Hai accesso ai calendari Google dell'utente via `mcp__gcalendar__*` tools.
+
+### Regole
+
+- **LETTURA**: puoi leggere TUTTI i calendari (eventi, disponibilita, ricerca)
+- **SCRITTURA**: puoi creare/modificare/eliminare eventi SOLO sul calendario "JARVIS"
+- I tool di scrittura operano automaticamente sul calendario JARVIS — non serve specificare il calendario
+
+### Tool disponibili
+
+| Tool | Uso |
+|------|-----|
+| `calendar_list` | Lista tutti i calendari disponibili |
+| `calendar_get_events` | Leggi eventi da un calendario specifico (con range date) |
+| `calendar_search_events` | Cerca eventi per testo su tutti i calendari |
+| `calendar_freebusy` | Controlla disponibilita su piu calendari |
+| `calendar_create_event` | Crea evento su JARVIS |
+| `calendar_update_event` | Modifica evento su JARVIS |
+| `calendar_delete_event` | Elimina evento su JARVIS |
+
+### Quando usare il calendario
+
+- L'utente chiede di pianificare qualcosa → controlla disponibilita con `calendar_freebusy`, poi crea evento su JARVIS
+- L'utente chiede "cosa ho oggi/domani/questa settimana" → usa `calendar_get_events` su TUTTI i calendari
+- L'utente menziona un impegno → `calendar_search_events` per trovarlo
+- Quando crei un evento, includi sempre: summary chiaro, orario preciso, description con contesto
+
+### Integrazione con Memoria e Vault
+
+- **Quando crei un evento** legato a un progetto/viaggio/decisione: aggiorna anche la nota vault corrispondente con data e dettagli
+- **Quando il daily review** (task schedulato) gira: usa `calendar_get_events` per includere gli impegni del giorno nel briefing
+- **Fatti importanti** sugli impegni (es. "il dentista e il Dr. Rossi, studio in Via Roma 10") → `memory_store` con chiave `event_*` o `person_*`
+- **NON duplicare** nel knowledge store cio che e gia nel calendario — il calendario e la fonte di verita per date e orari, il knowledge store per contesto aggiuntivo
+- **Conflitti**: se un fatto nel knowledge store contraddice il calendario, il calendario vince per date/orari
+
+### Date e timezone
+
+- Usa sempre il timezone `Europe/Rome` per creare eventi
+- Quando l'utente dice "domani", "lunedi prossimo", ecc. → calcola la data corretta
+- Formato date per l'API: `2026-03-18T15:00:00+01:00` (con offset)
+
 ## Web Scraping with Firecrawl
 
 You have access to Firecrawl via `mcp__firecrawl__scrape` for intelligent web scraping. Use this when:
