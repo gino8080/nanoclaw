@@ -24,6 +24,7 @@ import {
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
+import { runHostAgent } from './host-runner.js';
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
@@ -412,21 +413,31 @@ async function runAgent(
   }
 
   try {
-    const output = await runContainerAgent(
-      group,
-      {
-        prompt,
-        sessionId,
-        groupFolder: group.folder,
-        chatJid,
-        isMain,
-        singleQuery: opts?.singleQuery,
-        assistantName: ASSISTANT_NAME,
-      },
-      (proc, containerName) =>
-        queue.registerProcess(chatJid, proc, containerName, group.folder),
-      wrappedOnOutput,
-    );
+    const inputObj = {
+      prompt,
+      sessionId,
+      groupFolder: group.folder,
+      chatJid,
+      isMain,
+      singleQuery: opts?.singleQuery,
+      assistantName: ASSISTANT_NAME,
+    };
+
+    const output = group.useHostRunner
+      ? await runHostAgent(
+          group,
+          inputObj,
+          (_proc, name) =>
+            queue.registerProcess(chatJid, null as never, name, group.folder),
+          wrappedOnOutput,
+        )
+      : await runContainerAgent(
+          group,
+          inputObj,
+          (proc, containerName) =>
+            queue.registerProcess(chatJid, proc, containerName, group.folder),
+          wrappedOnOutput,
+        );
 
     if (output.newSessionId) {
       sessions[group.folder] = output.newSessionId;

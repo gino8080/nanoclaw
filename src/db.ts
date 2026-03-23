@@ -736,6 +736,9 @@ export function getRegisteredGroup(
     requiresTrigger:
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
+    useHostRunner: row.container_config
+      ? JSON.parse(row.container_config).useHostRunner === true
+      : undefined,
   };
 }
 
@@ -752,7 +755,12 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.folder,
     group.trigger,
     group.added_at,
-    group.containerConfig ? JSON.stringify(group.containerConfig) : null,
+    group.containerConfig || group.useHostRunner
+      ? JSON.stringify({
+          ...group.containerConfig,
+          ...(group.useHostRunner ? { useHostRunner: true } : {}),
+        })
+      : null,
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
   );
@@ -785,17 +793,19 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       );
       continue;
     }
+    const parsedConfig = row.container_config
+      ? JSON.parse(row.container_config)
+      : undefined;
     result[row.jid] = {
       name: row.name,
       folder: row.folder,
       trigger: row.trigger_pattern,
       added_at: row.added_at,
-      containerConfig: row.container_config
-        ? JSON.parse(row.container_config)
-        : undefined,
+      containerConfig: parsedConfig,
       requiresTrigger:
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       isMain: row.is_main === 1 ? true : undefined,
+      useHostRunner: parsedConfig?.useHostRunner === true ? true : undefined,
     };
   }
   return result;

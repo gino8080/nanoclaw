@@ -32,10 +32,7 @@ import {
   updateTask,
   upsertKnowledge,
 } from './db.js';
-import {
-  isValidGroupFolder,
-  resolveGroupFolderPath,
-} from './group-folder.js';
+import { isValidGroupFolder, resolveGroupFolderPath } from './group-folder.js';
 import { processListOperation } from './lists.js';
 import { logger } from './logger.js';
 import { validateMount } from './mount-security.js';
@@ -1325,12 +1322,10 @@ export async function processTaskIpc(
       const botToken =
         process.env.DISCORD_BOT_TOKEN || envVars.DISCORD_BOT_TOKEN || '';
       if (!botToken) {
-        writeIpcResponse(
-          sourceGroup,
-          'project_responses',
-          data.requestId,
-          { success: false, error: 'DISCORD_BOT_TOKEN not configured' },
-        );
+        writeIpcResponse(sourceGroup, 'project_responses', data.requestId, {
+          success: false,
+          error: 'DISCORD_BOT_TOKEN not configured',
+        });
         break;
       }
 
@@ -1341,16 +1336,11 @@ export async function processTaskIpc(
         envVarsGuild.DISCORD_GUILD_ID ||
         '';
       if (!regGuildId) {
-        writeIpcResponse(
-          sourceGroup,
-          'project_responses',
-          data.requestId,
-          {
-            success: false,
-            error:
-              'guildId is required. Set DISCORD_GUILD_ID in .env or pass it explicitly.',
-          },
-        );
+        writeIpcResponse(sourceGroup, 'project_responses', data.requestId, {
+          success: false,
+          error:
+            'guildId is required. Set DISCORD_GUILD_ID in .env or pass it explicitly.',
+        });
         break;
       }
 
@@ -1361,19 +1351,18 @@ export async function processTaskIpc(
       };
       const regMountCheck = validateMount(regMountDef, true);
       if (!regMountCheck.allowed) {
-        writeIpcResponse(
-          sourceGroup,
-          'project_responses',
-          data.requestId,
-          { success: false, error: `Path not allowed: ${regMountCheck.reason}` },
-        );
+        writeIpcResponse(sourceGroup, 'project_responses', data.requestId, {
+          success: false,
+          error: `Path not allowed: ${regMountCheck.reason}`,
+        });
         break;
       }
 
       // Derive names from the project path
       const projectBasename = path.basename(data.projectPath);
       const discordChannelName =
-        data.channelName || projectBasename.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+        data.channelName ||
+        projectBasename.toLowerCase().replace(/[^a-z0-9-]/g, '-');
       const groupFolder = `discord_${discordChannelName.replace(/-/g, '_')}`;
 
       // Check if folder already registered
@@ -1381,12 +1370,10 @@ export async function processTaskIpc(
         Object.values(registeredGroups).map((g) => g.folder),
       );
       if (existingFolders.has(groupFolder)) {
-        writeIpcResponse(
-          sourceGroup,
-          'project_responses',
-          data.requestId,
-          { success: false, error: `Group folder '${groupFolder}' already exists` },
-        );
+        writeIpcResponse(sourceGroup, 'project_responses', data.requestId, {
+          success: false,
+          error: `Group folder '${groupFolder}' already exists`,
+        });
         break;
       }
 
@@ -1410,19 +1397,17 @@ export async function processTaskIpc(
 
         if (!createRes.ok) {
           const errBody = await createRes.text();
-          writeIpcResponse(
-            sourceGroup,
-            'project_responses',
-            data.requestId,
-            {
-              success: false,
-              error: `Discord API error ${createRes.status}: ${errBody}`,
-            },
-          );
+          writeIpcResponse(sourceGroup, 'project_responses', data.requestId, {
+            success: false,
+            error: `Discord API error ${createRes.status}: ${errBody}`,
+          });
           break;
         }
 
-        const channelData = (await createRes.json()) as { id: string; name: string };
+        const channelData = (await createRes.json()) as {
+          id: string;
+          name: string;
+        };
         const newJid = `dc:${channelData.id}`;
 
         // Register the group in NanoClaw
@@ -1433,6 +1418,7 @@ export async function processTaskIpc(
           added_at: new Date().toISOString(),
           requiresTrigger: false,
           isMain: false,
+          useHostRunner: true,
           containerConfig: {
             additionalMounts: [
               {
@@ -1456,19 +1442,14 @@ export async function processTaskIpc(
           fs.writeFileSync(claudeMdPath, template, 'utf-8');
         }
 
-        writeIpcResponse(
-          sourceGroup,
-          'project_responses',
-          data.requestId,
-          {
-            success: true,
-            channelId: channelData.id,
-            channelName: channelData.name,
-            jid: newJid,
-            folder: groupFolder,
-            containerPath: `/workspace/extra/${projectBasename}`,
-          },
-        );
+        writeIpcResponse(sourceGroup, 'project_responses', data.requestId, {
+          success: true,
+          channelId: channelData.id,
+          channelName: channelData.name,
+          jid: newJid,
+          folder: groupFolder,
+          containerPath: `/workspace/extra/${projectBasename}`,
+        });
 
         logger.info(
           {
@@ -1481,15 +1462,10 @@ export async function processTaskIpc(
           'Discord project registered via IPC',
         );
       } catch (err) {
-        writeIpcResponse(
-          sourceGroup,
-          'project_responses',
-          data.requestId,
-          {
-            success: false,
-            error: `Failed: ${err instanceof Error ? err.message : String(err)}`,
-          },
-        );
+        writeIpcResponse(sourceGroup, 'project_responses', data.requestId, {
+          success: false,
+          error: `Failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
       break;
     }
@@ -1512,12 +1488,10 @@ export async function processTaskIpc(
       const unregJid = `dc:${data.discordChannelId}`;
       const unregGroup = registeredGroups[unregJid];
       if (!unregGroup) {
-        writeIpcResponse(
-          sourceGroup,
-          'project_responses',
-          data.requestId,
-          { success: false, error: `No group registered for ${unregJid}` },
-        );
+        writeIpcResponse(sourceGroup, 'project_responses', data.requestId, {
+          success: false,
+          error: `No group registered for ${unregJid}`,
+        });
         break;
       }
 
@@ -1534,17 +1508,12 @@ export async function processTaskIpc(
         logger.error({ err, jid: unregJid }, 'Failed to delete group from DB');
       }
 
-      writeIpcResponse(
-        sourceGroup,
-        'project_responses',
-        data.requestId,
-        {
-          success: true,
-          jid: unregJid,
-          folder: unregGroup.folder,
-          note: 'Group unregistered. Discord channel NOT deleted — remove it manually if needed.',
-        },
-      );
+      writeIpcResponse(sourceGroup, 'project_responses', data.requestId, {
+        success: true,
+        jid: unregJid,
+        folder: unregGroup.folder,
+        note: 'Group unregistered. Discord channel NOT deleted — remove it manually if needed.',
+      });
 
       logger.info(
         { jid: unregJid, folder: unregGroup.folder },
