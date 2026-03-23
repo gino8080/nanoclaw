@@ -25,7 +25,9 @@ import { RegisteredGroup } from './types.js';
  */
 function extractSessionTitle(prompt: string, groupName: string): string {
   // Extract last message content from XML wrapping
-  const msgMatch = prompt.match(/<message[^>]*>([^<]+)<\/message>\s*<\/messages>/);
+  const msgMatch = prompt.match(
+    /<message[^>]*>([^<]+)<\/message>\s*<\/messages>/,
+  );
   if (msgMatch) {
     const text = msgMatch[1].trim();
     const truncated = text.length > 80 ? text.slice(0, 77) + '...' : text;
@@ -70,9 +72,6 @@ function resolveProjectCwd(group: RegisteredGroup): string {
   }
   return resolveGroupFolderPath(group.folder);
 }
-
-
-
 
 export async function runHostAgent(
   group: RegisteredGroup,
@@ -165,7 +164,10 @@ export async function runHostAgent(
       // Track session ID from init message
       if (message.type === 'system' && message.subtype === 'init') {
         sessionId = (message as { session_id: string }).session_id;
-        logger.info({ sessionId, cwd: projectCwd }, 'Host agent session initialized');
+        logger.info(
+          { sessionId, cwd: projectCwd },
+          'Host agent session initialized',
+        );
       }
 
       // Stream results back via callback

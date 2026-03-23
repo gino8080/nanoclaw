@@ -46,6 +46,7 @@ cat > /tmp/input.json
 # Drop privileges if running as root (main-group containers)
 if [ "$(id -u)" = "0" ] && [ -n "$RUN_UID" ]; then
   chown "$RUN_UID:$RUN_GID" /tmp/input.json /tmp/dist
+  chown -R "$RUN_UID:$RUN_GID" /home/node 2>/dev/null || true
   exec setpriv --reuid="$RUN_UID" --regid="$RUN_GID" --clear-groups -- node /tmp/dist/index.js < /tmp/input.json
 fi
 
