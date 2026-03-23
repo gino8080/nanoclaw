@@ -3,11 +3,14 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  CREDENTIAL_PROXY_PORT,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
   TELEGRAM_BOT_POOL,
+  TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
+import { startCredentialProxy } from './credential-proxy.js';
 import { startHttpApi } from './http-api.js';
 import './channels/index.js';
 import { initBotPool, sendPoolMessage } from './channels/telegram.js';
@@ -21,9 +24,11 @@ import {
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
+import { runHostAgent } from './host-runner.js';
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
+  PROXY_BIND_HOST,
 } from './container-runtime.js';
 import {
   getAllChats,
@@ -32,6 +37,7 @@ import {
   getAllTasks,
   getMessagesSince,
   getNewMessages,
+  getRegisteredGroup,
   getRouterState,
   initDatabase,
   setRegisteredGroup,
@@ -52,7 +58,11 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
-import { isTokenExpiringSoon, refreshAndCacheToken } from './oauth-keychain.js';
+import {
+  getCachedToken,
+  isTokenExpiringSoon,
+  refreshAndCacheToken,
+} from './oauth-keychain.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -64,9 +74,22 @@ let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
+
+/**
+ * Build trigger regex for a specific group.
+ * Uses the group's trigger_pattern if set, otherwise falls back to global.
+ */
+function getGroupTriggerPattern(group: RegisteredGroup): RegExp {
+  if (group.trigger) {
+    const escaped = group.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^${escaped}\\b`, 'i');
+  }
+  return TRIGGER_PATTERN;
+}
 let messageLoopRunning = false;
 const consecutiveFailures: Record<string, number> = {};
 const SESSION_RESET_THRESHOLD = 3;
+let lastAuthWarningAt = 0;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -171,16 +194,18 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
+    const groupTrigger = getGroupTriggerPattern(group);
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
       (m) =>
-        TRIGGER_PATTERN.test(m.content.trim()) &&
+        (groupTrigger.test(m.content.trim()) ||
+          TRIGGER_PATTERN.test(m.content.trim())) &&
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages);
+  const prompt = formatMessages(missedMessages, TIMEZONE);
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -234,6 +259,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       if (text) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
+        // Store bot response in DB so it's searchable via FTS memory
+        storeMessage({
+          id: `bot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          chat_jid: chatJid,
+          sender: 'bot',
+          sender_name: ASSISTANT_NAME,
+          content: text,
+          timestamp: new Date().toISOString(),
+          is_from_me: true,
+          is_bot_message: true,
+        });
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
@@ -354,25 +390,54 @@ async function runAgent(
         { message: refreshResult.message },
         'Pre-invocation OAuth refresh failed',
       );
+
+      // No valid token at all — skip container to avoid pointless timeout
+      if (!getCachedToken()) {
+        logger.error('No valid OAuth token available — skipping container');
+        const now = Date.now();
+        if (now - lastAuthWarningAt > 5 * 60 * 1000) {
+          lastAuthWarningAt = now;
+          const channel = channels.find(
+            (c) => c.ownsJid(chatJid) && c.isConnected(),
+          );
+          channel
+            ?.sendMessage(
+              chatJid,
+              '⚠️ Token OAuth scaduto e refresh fallito. Usa /login per rinnovarlo.',
+            )
+            .catch(() => {});
+        }
+        return 'error';
+      }
     }
   }
 
   try {
-    const output = await runContainerAgent(
-      group,
-      {
-        prompt,
-        sessionId,
-        groupFolder: group.folder,
-        chatJid,
-        isMain,
-        singleQuery: opts?.singleQuery,
-        assistantName: ASSISTANT_NAME,
-      },
-      (proc, containerName) =>
-        queue.registerProcess(chatJid, proc, containerName, group.folder),
-      wrappedOnOutput,
-    );
+    const inputObj = {
+      prompt,
+      sessionId,
+      groupFolder: group.folder,
+      chatJid,
+      isMain,
+      singleQuery: opts?.singleQuery,
+      assistantName: ASSISTANT_NAME,
+    };
+
+    const output = group.useHostRunner
+      ? await runHostAgent(
+          group,
+          inputObj,
+          (_proc, name) =>
+            queue.registerProcess(chatJid, null as never, name, group.folder),
+          wrappedOnOutput,
+        )
+      : await runContainerAgent(
+          group,
+          inputObj,
+          (proc, containerName) =>
+            queue.registerProcess(chatJid, proc, containerName, group.folder),
+          wrappedOnOutput,
+        );
 
     if (output.newSessionId) {
       sessions[group.folder] = output.newSessionId;
@@ -468,10 +533,12 @@ async function startMessageLoop(): Promise<void> {
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
+            const groupTrigger = getGroupTriggerPattern(group);
             const allowlistCfg = loadSenderAllowlist();
             const hasTrigger = groupMessages.some(
               (m) =>
-                TRIGGER_PATTERN.test(m.content.trim()) &&
+                (groupTrigger.test(m.content.trim()) ||
+                  TRIGGER_PATTERN.test(m.content.trim())) &&
                 (m.is_from_me ||
                   isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
             );
@@ -487,7 +554,7 @@ async function startMessageLoop(): Promise<void> {
           );
           const messagesToSend =
             allPending.length > 0 ? allPending : groupMessages;
-          const formatted = formatMessages(messagesToSend);
+          const formatted = formatMessages(messagesToSend, TIMEZONE);
 
           if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
@@ -545,9 +612,16 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
+  // Start credential proxy (containers route API calls through this)
+  const proxyServer = await startCredentialProxy(
+    CREDENTIAL_PROXY_PORT,
+    PROXY_BIND_HOST,
+  );
+
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    proxyServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
@@ -589,11 +663,13 @@ async function main(): Promise<void> {
         const had = !!sessions[groupFolder];
         delete sessions[groupFolder];
         deleteSession(groupFolder);
-        consecutiveFailures[
+        const groupJid =
           Object.entries(registeredGroups).find(
             ([, g]) => g.folder === groupFolder,
-          )?.[0] ?? ''
-        ] = 0;
+          )?.[0] ?? '';
+        consecutiveFailures[groupJid] = 0;
+        // Kill the active container so next message spawns fresh
+        if (groupJid) queue.stopGroup(groupJid);
         logger.info({ groupFolder }, 'Session reset via /reset command');
         return had
           ? `✅ Session for \`${groupFolder}\` cleared. Next message starts fresh.`
@@ -671,6 +747,17 @@ async function main(): Promise<void> {
     sendMessage: (jid, text) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      // Store bot IPC messages in DB for FTS memory
+      storeMessage({
+        id: `bot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        chat_jid: jid,
+        sender: 'bot',
+        sender_name: ASSISTANT_NAME,
+        content: text,
+        timestamp: new Date().toISOString(),
+        is_from_me: true,
+        is_bot_message: true,
+      });
       return channel.sendMessage(jid, text);
     },
     sendPhoto: (jid, photo, caption) => {
@@ -699,6 +786,7 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
+    stopGroup: (groupJid: string) => queue.stopGroup(groupJid),
   });
   // HTTP API for Siri Shortcuts integration (iPhone → Jarvis without opening Telegram)
   startHttpApi({

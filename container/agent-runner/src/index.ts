@@ -16,7 +16,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { query, HookCallback, PreCompactHookInput, PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk';
+import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
 interface ContainerInput {
@@ -183,30 +183,6 @@ function createPreCompactHook(assistantName?: string): HookCallback {
     }
 
     return {};
-  };
-}
-
-// Secrets to strip from Bash tool subprocess environments.
-// These are needed by claude-code for API auth but should never
-// be visible to commands Kit runs.
-const SECRET_ENV_VARS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'];
-
-function createSanitizeBashHook(): HookCallback {
-  return async (input, _toolUseId, _context) => {
-    const preInput = input as PreToolUseHookInput;
-    const command = (preInput.tool_input as { command?: string })?.command;
-    if (!command) return {};
-
-    const unsetPrefix = `unset ${SECRET_ENV_VARS.join(' ')} 2>/dev/null; `;
-    return {
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        updatedInput: {
-          ...(preInput.tool_input as Record<string, unknown>),
-          command: unsetPrefix + command,
-        },
-      },
-    };
   };
 }
 
@@ -398,39 +374,38 @@ async function runQuery(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Load global CLAUDE.md as additional system context (shared across all groups)
-  const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
-  let globalClaudeMd: string | undefined;
-  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
-    globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+  // Additional directories whose CLAUDE.md files the SDK reads on every invocation
+  // (including session resume). This is the correct way to inject shared instructions.
+  const additionalDirs: string[] = [];
+
+  // Global CLAUDE.md — shared rules (memory, formatting, lists, etc.)
+  const globalDir = '/workspace/global';
+  if (fs.existsSync(globalDir)) {
+    additionalDirs.push(globalDir);
   }
 
-  // Discover additional directories mounted at /workspace/extra/*
-  // These are passed to the SDK so their CLAUDE.md files are loaded automatically
-  const extraDirs: string[] = [];
+  // Extra mounted directories (e.g. NANO_CLAW_DATA)
   const extraBase = '/workspace/extra';
   if (fs.existsSync(extraBase)) {
     for (const entry of fs.readdirSync(extraBase)) {
       const fullPath = path.join(extraBase, entry);
       if (fs.statSync(fullPath).isDirectory()) {
-        extraDirs.push(fullPath);
+        additionalDirs.push(fullPath);
       }
     }
   }
-  if (extraDirs.length > 0) {
-    log(`Additional directories: ${extraDirs.join(', ')}`);
+  if (additionalDirs.length > 0) {
+    log(`Additional directories: ${additionalDirs.join(', ')}`);
   }
 
   for await (const message of query({
     prompt: stream,
     options: {
       cwd: '/workspace/group',
-      additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
+      additionalDirectories:
+        additionalDirs.length > 0 ? additionalDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
-        : undefined,
       allowedTools: [
         'Bash',
         'Read', 'Write', 'Edit', 'Glob', 'Grep',
@@ -445,6 +420,8 @@ async function runQuery(
         'mcp__gmail__list_email_labels',
         'mcp__gmail__download_attachment',
         'mcp__googlemaps__*',
+        'mcp__gcalendar__*',
+        'mcp__firecrawl__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -454,6 +431,7 @@ async function runQuery(
         gmail: {
           command: 'npx',
           args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+          env: { HOME: '/home/node' },
         },
         nanoclaw: {
           command: 'node',
@@ -474,10 +452,27 @@ async function runQuery(
             },
           },
         } : {}),
+        ...(sdkEnv.NANOCLAW_CALENDAR_ID ? {
+          gcalendar: {
+            command: 'node',
+            args: [path.join(path.dirname(mcpServerPath), 'gcalendar-mcp.js')],
+            env: {
+              NANOCLAW_CALENDAR_ID: sdkEnv.NANOCLAW_CALENDAR_ID,
+            },
+          },
+        } : {}),
+        ...(sdkEnv.FIRECRAWL_API_KEY ? {
+          firecrawl: {
+            command: 'node',
+            args: [path.join(path.dirname(mcpServerPath), 'firecrawl-mcp.js')],
+            env: {
+              FIRECRAWL_API_KEY: sdkEnv.FIRECRAWL_API_KEY,
+            },
+          },
+        } : {}),
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
-        PreToolUse: [{ matcher: 'Bash', hooks: [createSanitizeBashHook()] }],
       },
     }
   })) {
@@ -522,7 +517,6 @@ async function main(): Promise<void> {
   try {
     const stdinData = await readStdin();
     containerInput = JSON.parse(stdinData);
-    // Delete the temp file the entrypoint wrote — it contains secrets
     try { fs.unlinkSync('/tmp/input.json'); } catch { /* may not exist */ }
     log(`Received input for group: ${containerInput.groupFolder}`);
   } catch (err) {
@@ -534,12 +528,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Build SDK env: merge secrets into process.env for the SDK only.
-  // Secrets never touch process.env itself, so Bash subprocesses can't see them.
-  const sdkEnv: Record<string, string | undefined> = { ...process.env };
-  for (const [key, value] of Object.entries(containerInput.secrets || {})) {
-    sdkEnv[key] = value;
-  }
+  // Merge host-provided secrets (passed via stdin) into the SDK environment.
+  // These are non-Anthropic secrets (API keys for Maps, Calendar, etc.)
+  // that the host reads from .env and injects into the container input.
+  const sdkEnv: Record<string, string | undefined> = {
+    ...process.env,
+    ...containerInput.secrets,
+  };
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');

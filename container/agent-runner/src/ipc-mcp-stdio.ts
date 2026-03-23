@@ -110,7 +110,7 @@ const server = new McpServer({
 
 server.tool(
   'send_message',
-  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times. Note: when running as a scheduled task, your final output is NOT sent to the user — use this tool if you need to communicate with the user or group.",
+  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
   {
     text: z.string().describe('The message text to send'),
     sender: z
@@ -435,7 +435,7 @@ Image config defaults: 1K resolution, 1:1 aspect ratio. Override with parameters
 
 server.tool(
   'schedule_task',
-  `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools.
+  `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 
 CONTEXT MODE - Choose based on task type:
 \u2022 "group": Task runs in the group's conversation context, with access to chat history. Use for tasks that need context about ongoing discussions, user preferences, or recent interactions.
@@ -547,8 +547,11 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     const targetJid =
       isMain && args.target_group_jid ? args.target_group_jid : chatJid;
 
+    const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
     const data = {
       type: 'schedule_task',
+      taskId,
       prompt: args.prompt,
       schedule_type: args.schedule_type,
       schedule_value: args.schedule_value,
@@ -558,13 +561,13 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       timestamp: new Date().toISOString(),
     };
 
-    const filename = writeIpcFile(TASKS_DIR, data);
+    writeIpcFile(TASKS_DIR, data);
 
     return {
       content: [
         {
           type: 'text' as const,
-          text: `Task scheduled (${filename}): ${args.schedule_type} - ${args.schedule_value}`,
+          text: `Task ${taskId} scheduled: ${args.schedule_type} - ${args.schedule_value}`,
         },
       ],
     };
@@ -707,6 +710,84 @@ server.tool(
         {
           type: 'text' as const,
           text: `Task ${args.task_id} cancellation requested.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'update_task',
+  'Update an existing scheduled task. Only provided fields are changed; omitted fields stay the same.',
+  {
+    task_id: z.string().describe('The task ID to update'),
+    prompt: z.string().optional().describe('New prompt for the task'),
+    schedule_type: z
+      .enum(['cron', 'interval', 'once'])
+      .optional()
+      .describe('New schedule type'),
+    schedule_value: z
+      .string()
+      .optional()
+      .describe('New schedule value (see schedule_task for format)'),
+  },
+  async (args) => {
+    // Validate schedule_value if provided
+    if (
+      args.schedule_type === 'cron' ||
+      (!args.schedule_type && args.schedule_value)
+    ) {
+      if (args.schedule_value) {
+        try {
+          CronExpressionParser.parse(args.schedule_value);
+        } catch {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Invalid cron: "${args.schedule_value}".`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+    }
+    if (args.schedule_type === 'interval' && args.schedule_value) {
+      const ms = parseInt(args.schedule_value, 10);
+      if (isNaN(ms) || ms <= 0) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Invalid interval: "${args.schedule_value}".`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    const data: Record<string, string | undefined> = {
+      type: 'update_task',
+      taskId: args.task_id,
+      groupFolder,
+      isMain: String(isMain),
+      timestamp: new Date().toISOString(),
+    };
+    if (args.prompt !== undefined) data.prompt = args.prompt;
+    if (args.schedule_type !== undefined)
+      data.schedule_type = args.schedule_type;
+    if (args.schedule_value !== undefined)
+      data.schedule_value = args.schedule_value;
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Task ${args.task_id} update requested.`,
         },
       ],
     };
@@ -1024,6 +1105,863 @@ Results are ordered by most recent first.`,
         },
       ],
       isError: true,
+    };
+  },
+);
+
+// --- Memory tools ---
+
+async function pollMemoryResponse(
+  requestId: string,
+  timeoutMs = 10000,
+): Promise<unknown> {
+  const responsePath = path.join(
+    IPC_DIR,
+    'memory_responses',
+    `${requestId}.json`,
+  );
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (fs.existsSync(responsePath)) {
+      try {
+        const result = JSON.parse(fs.readFileSync(responsePath, 'utf-8'));
+        fs.unlinkSync(responsePath);
+        return result;
+      } catch {
+        // File might be partially written, retry
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return null;
+}
+
+server.tool(
+  'memory_search',
+  `Search long-term memory. Searches both stored knowledge (facts, preferences) and message history using full-text search with ranking.
+Knowledge results (distilled facts) are returned first, followed by raw message matches.
+Use this when you need to recall past conversations, user preferences, or stored facts.
+Tip: use word stems for better Italian recall (e.g. "compra" instead of "comprato").`,
+  {
+    query: z
+      .string()
+      .describe('Search query (supports FTS5: "exact phrase", word1 word2)'),
+    scope: z
+      .enum(['all', 'messages', 'knowledge'])
+      .optional()
+      .default('all')
+      .describe(
+        'Search scope: all (default), messages only, or knowledge only',
+      ),
+    category: z
+      .string()
+      .optional()
+      .describe(
+        'Filter knowledge by category: fact, preference, person, event',
+      ),
+    limit: z.number().optional().default(20).describe('Max results per scope'),
+  },
+  async (args: {
+    query: string;
+    scope?: 'all' | 'messages' | 'knowledge';
+    category?: string;
+    limit?: number;
+  }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'memory_search',
+      requestId,
+      query: args.query,
+      scope: args.scope || 'all',
+      category: args.category,
+      limit: args.limit,
+      // No chatJid — memory search should be cross-chat
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollMemoryResponse(requestId)) as {
+      success: boolean;
+      knowledge: Array<{
+        key: string;
+        value: string;
+        category: string;
+        confidence: number;
+        updated_at: string;
+      }>;
+      messages: Array<{
+        sender_name: string;
+        content: string;
+        timestamp: string;
+        chat_jid: string;
+      }>;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'Memory search timed out.' }],
+        isError: true,
+      };
+    }
+
+    const parts: string[] = [];
+
+    if (result.knowledge?.length > 0) {
+      parts.push('## Knowledge Store');
+      for (const k of result.knowledge) {
+        parts.push(
+          `- **${k.key}** [${k.category}] (confidence: ${k.confidence}): ${k.value} _(${k.updated_at})_`,
+        );
+      }
+    }
+
+    if (result.messages?.length > 0) {
+      parts.push('## Message History');
+      for (const m of result.messages) {
+        parts.push(`- [${m.timestamp}] ${m.sender_name}: ${m.content}`);
+      }
+    }
+
+    if (parts.length === 0) {
+      return {
+        content: [{ type: 'text' as const, text: 'No results found.' }],
+      };
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: parts.join('\n') }],
+    };
+  },
+);
+
+server.tool(
+  'memory_store',
+  `Store a fact, preference, or piece of knowledge for long-term recall across sessions.
+Returns whether it inserted a new entry or updated an existing one (with the previous value).
+If a key already exists for this group, it will be updated (UPSERT).
+
+Key conventions (MUST follow):
+- snake_case, English
+- Prefixes: user_, trip_, project_, person_, place_
+- Examples: user_milk_preference, trip_valencia_2026, person_mario_rossi
+- BEFORE creating a new key, use memory_list to check if one already exists for the same concept
+- Keep value brief and atomic for simple preferences. Use full sentences only for complex facts.`,
+  {
+    key: z
+      .string()
+      .describe(
+        'Stable identifier in snake_case (e.g. user_milk_preference, trip_valencia_2026)',
+      ),
+    value: z
+      .string()
+      .describe(
+        'The information to remember. Brief and atomic for preferences, descriptive for complex facts.',
+      ),
+    category: z
+      .enum(['fact', 'preference', 'person', 'event'])
+      .describe('Type of knowledge'),
+    source: z
+      .string()
+      .optional()
+      .describe(
+        'Where you learned this (e.g. "user stated", "conversation:2026-03-10")',
+      ),
+    confidence: z
+      .number()
+      .optional()
+      .default(1.0)
+      .describe(
+        '1.0=explicitly stated by user, 0.6=inferred, 0.3=hypothesis. Use 1.0 ONLY for facts the user explicitly said.',
+      ),
+    expires_at: z
+      .string()
+      .optional()
+      .describe('ISO timestamp when this becomes stale (optional)'),
+  },
+  async (args: {
+    key: string;
+    value: string;
+    category: string;
+    source?: string;
+    confidence?: number;
+    expires_at?: string;
+  }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'memory_store',
+      requestId,
+      key: args.key,
+      value: args.value,
+      category: args.category,
+      source: args.source,
+      confidence: args.confidence,
+      expiresAt: args.expires_at,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollMemoryResponse(requestId)) as {
+      success: boolean;
+      action: 'inserted' | 'updated';
+      previous_value?: string;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'Memory store timed out.' }],
+        isError: true,
+      };
+    }
+
+    const msg =
+      result.action === 'updated'
+        ? `Key "${args.key}" updated (was: "${result.previous_value}")`
+        : `Key "${args.key}" stored`;
+
+    return {
+      content: [{ type: 'text' as const, text: msg }],
+    };
+  },
+);
+
+server.tool(
+  'memory_list',
+  `List stored knowledge entries. Use to see what you remember about a topic or category.
+Use this BEFORE memory_store to check if a key already exists.`,
+  {
+    category: z
+      .string()
+      .optional()
+      .describe('Filter by category: fact, preference, person, event'),
+    prefix: z
+      .string()
+      .optional()
+      .describe(
+        'Filter keys starting with this prefix (e.g. "user_", "trip_")',
+      ),
+    only_expired: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe('Only show entries past their expires_at date (for cleanup)'),
+    limit: z.number().optional().default(50).describe('Max entries to return'),
+  },
+  async (args: {
+    category?: string;
+    prefix?: string;
+    only_expired?: boolean;
+    limit?: number;
+  }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'memory_list',
+      requestId,
+      category: args.category,
+      prefix: args.prefix,
+      onlyExpired: args.only_expired,
+      limit: args.limit,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollMemoryResponse(requestId)) as {
+      success: boolean;
+      entries: Array<{
+        key: string;
+        value: string;
+        category: string;
+        confidence: number;
+        updated_at: string;
+        expires_at: string | null;
+      }>;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'Memory list timed out.' }],
+        isError: true,
+      };
+    }
+
+    if (!result.entries || result.entries.length === 0) {
+      return {
+        content: [
+          { type: 'text' as const, text: 'No knowledge entries found.' },
+        ],
+      };
+    }
+
+    const formatted = result.entries
+      .map(
+        (e) =>
+          `- **${e.key}** [${e.category}] (confidence: ${e.confidence}): ${e.value}${e.expires_at ? ` (expires: ${e.expires_at})` : ''}`,
+      )
+      .join('\n');
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${result.entries.length} entries:\n${formatted}`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'memory_delete',
+  'Delete a knowledge entry by key. Use for cleanup of obsolete or incorrect facts.',
+  {
+    key: z.string().describe('The key to delete'),
+  },
+  async (args: { key: string }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'memory_delete',
+      requestId,
+      key: args.key,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollMemoryResponse(requestId)) as {
+      success: boolean;
+      deleted: boolean;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'Memory delete timed out.' }],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: result.deleted
+            ? `Key "${args.key}" deleted.`
+            : `Key "${args.key}" not found.`,
+        },
+      ],
+    };
+  },
+);
+
+// --- Project management tools ---
+
+async function pollProjectResponse(
+  responseType: string,
+  requestId: string,
+  timeoutMs = 10000,
+): Promise<unknown> {
+  const responsePath = path.join(IPC_DIR, responseType, `${requestId}.json`);
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (fs.existsSync(responsePath)) {
+      try {
+        const result = JSON.parse(fs.readFileSync(responsePath, 'utf-8'));
+        fs.unlinkSync(responsePath);
+        return result;
+      } catch {
+        // File might be partially written, retry
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return null;
+}
+
+server.tool(
+  'list_available_projects',
+  `List projects available to mount from the host filesystem.
+Shows all projects under ~/PROJECTS with git status and CLAUDE.md presence.
+Use this to discover which projects can be mounted with mount_project.`,
+  {
+    root_path: z
+      .string()
+      .optional()
+      .describe(
+        'Root directory to scan (default: ~/PROJECTS). Must be in the mount allowlist.',
+      ),
+  },
+  async (args: { root_path?: string }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'list_projects',
+      requestId,
+      rootPath: args.root_path || '~/PROJECTS',
+      groupFolder,
+      chatJid,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollProjectResponse(
+      'project_responses',
+      requestId,
+    )) as {
+      success: boolean;
+      error?: string;
+      root?: string;
+      projects?: Array<{
+        name: string;
+        path: string;
+        hasGit: boolean;
+        hasClaude: boolean;
+        lastCommit?: string;
+      }>;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'List projects timed out.' }],
+        isError: true,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${result.error}` }],
+        isError: true,
+      };
+    }
+
+    if (!result.projects || result.projects.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `No projects found under ${result.root}`,
+          },
+        ],
+      };
+    }
+
+    const formatted = result.projects
+      .map(
+        (p) =>
+          `- ${p.name}${p.hasGit ? ' [git]' : ''}${p.hasClaude ? ' [CLAUDE.md]' : ''}${p.lastCommit ? ` (last: ${p.lastCommit.split(' ')[0]})` : ''}`,
+      )
+      .join('\n');
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${result.projects.length} projects under ${result.root}:\n${formatted}`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'mount_project',
+  `Mount a project from the host filesystem into this container.
+The project will be available at /workspace/extra/{name}.
+The container restarts automatically after mounting — your next message will have access.
+Use list_available_projects first to see available projects.`,
+  {
+    project_path: z
+      .string()
+      .describe(
+        'Absolute path or ~/relative path to the project on the host (e.g., ~/PROJECTS/PERSONAL/my-app)',
+      ),
+    readonly: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe('Mount read-only (default: false, read-write)'),
+    container_path: z
+      .string()
+      .optional()
+      .describe(
+        'Custom name for the mount point (default: derived from project folder name)',
+      ),
+  },
+  async (args: {
+    project_path: string;
+    readonly?: boolean;
+    container_path?: string;
+  }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'mount_project',
+      requestId,
+      projectPath: args.project_path,
+      containerPath: args.container_path,
+      readonly: args.readonly ?? false,
+      groupJid: chatJid,
+      chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollProjectResponse(
+      'mount_responses',
+      requestId,
+    )) as {
+      success: boolean;
+      error?: string;
+      containerPath?: string;
+      readonly?: boolean;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'Mount project timed out.' }],
+        isError: true,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        content: [
+          { type: 'text' as const, text: `Mount failed: ${result.error}` },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Project mounted at ${result.containerPath} (${result.readonly ? 'read-only' : 'read-write'}). Container will restart — the project will be available on your next message.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'unmount_project',
+  `Remove a mounted project from this container.
+The container restarts automatically after unmounting.`,
+  {
+    container_path: z
+      .string()
+      .describe(
+        'The container path name to unmount (e.g., "my-app" — the part after /workspace/extra/)',
+      ),
+  },
+  async (args: { container_path: string }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'unmount_project',
+      requestId,
+      containerPath: args.container_path,
+      groupJid: chatJid,
+      chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollProjectResponse(
+      'unmount_responses',
+      requestId,
+    )) as {
+      success: boolean;
+      error?: string;
+      removed?: string;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [
+          { type: 'text' as const, text: 'Unmount project timed out.' },
+        ],
+        isError: true,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Unmount failed: ${result.error}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Project "${result.removed}" unmounted. Container will restart.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'spawn_claude_session',
+  `Spawn a Claude Code session on the host for complex development tasks.
+The session runs directly on the host filesystem (not in a container).
+Use this when the task requires: multi-file refactoring, complex debugging,
+architectural decisions, or when the user wants to monitor the work.
+
+The user can connect to the session from their phone/desktop.
+The session runs independently until the user or a timeout closes it.`,
+  {
+    project_path: z
+      .string()
+      .describe(
+        'Path to the project on the host (e.g., ~/PROJECTS/PERSONAL/my-app)',
+      ),
+    task_description: z
+      .string()
+      .optional()
+      .describe('Description of the task for context'),
+    session_name: z
+      .string()
+      .optional()
+      .describe('Custom session name (default: auto-generated)'),
+  },
+  async (args: {
+    project_path: string;
+    task_description?: string;
+    session_name?: string;
+  }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'spawn_claude_session',
+      requestId,
+      projectPath: args.project_path,
+      name: args.session_name,
+      taskDescription: args.task_description,
+      groupFolder,
+      chatJid,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollProjectResponse(
+      'session_responses',
+      requestId,
+    )) as {
+      success: boolean;
+      error?: string;
+      pid?: number;
+      sessionName?: string;
+      projectPath?: string;
+      message?: string;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Spawn Claude session timed out.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Session spawn failed: ${result.error}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text:
+            result.message ||
+            `Claude Code session started (PID: ${result.pid}).`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'register_discord_project',
+  `Register a project from ~/PROJECTS as a dedicated Discord channel.
+Creates a new text channel in the Discord server and registers a NanoClaw group for it.
+The project will be mounted read-write in the new group's container.
+Use list_available_projects first to find the project path.
+Only available from the main group.`,
+  {
+    project_path: z
+      .string()
+      .describe(
+        'Absolute path or ~/relative path to the project (e.g., ~/PROJECTS/PERSONAL/my-app)',
+      ),
+    guild_id: z
+      .string()
+      .optional()
+      .describe(
+        'Discord server (guild) ID. Optional if DISCORD_GUILD_ID is set in .env.',
+      ),
+    channel_name: z
+      .string()
+      .optional()
+      .describe(
+        'Custom Discord channel name (default: derived from project folder name)',
+      ),
+  },
+  async (args: {
+    project_path: string;
+    guild_id?: string;
+    channel_name?: string;
+  }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'register_discord_project',
+      requestId,
+      projectPath: args.project_path,
+      guildId: args.guild_id,
+      channelName: args.channel_name,
+      groupFolder,
+      chatJid,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollProjectResponse(
+      'project_responses',
+      requestId,
+    )) as {
+      success: boolean;
+      error?: string;
+      channelId?: string;
+      channelName?: string;
+      jid?: string;
+      folder?: string;
+      containerPath?: string;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Register Discord project timed out.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Registration failed: ${result.error}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: [
+            `Discord project registered:`,
+            `- Channel: #${result.channelName} (${result.channelId})`,
+            `- Group: ${result.folder}`,
+            `- Project mount: ${result.containerPath}`,
+            ``,
+            `Send a message in #${result.channelName} to start working on the project.`,
+          ].join('\n'),
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'unregister_discord_project',
+  `Remove a Discord project registration.
+Stops the container and removes the NanoClaw group.
+Does NOT delete the Discord channel (do that manually).
+Only available from the main group.`,
+  {
+    discord_channel_id: z
+      .string()
+      .describe('The Discord channel ID to unregister'),
+  },
+  async (args: { discord_channel_id: string }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'unregister_discord_project',
+      requestId,
+      discordChannelId: args.discord_channel_id,
+      groupFolder,
+      chatJid,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollProjectResponse(
+      'project_responses',
+      requestId,
+    )) as {
+      success: boolean;
+      error?: string;
+      jid?: string;
+      folder?: string;
+      note?: string;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Unregister Discord project timed out.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Unregister failed: ${result.error}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Project unregistered: ${result.folder}\n${result.note || ''}`,
+        },
+      ],
     };
   },
 );

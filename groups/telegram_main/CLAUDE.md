@@ -83,6 +83,9 @@ When creating a teammate, include instructions like:
 You are the Marine Biologist. When you have findings or updates for the user, send them to the group using mcp__nanoclaw__send_message with sender set to "Marine Biologist". Keep each message short (2-4 sentences max). Use emojis for strong reactions. ONLY use single *asterisks* for bold (never **double**), _underscores_ for italic, • for bullets. No markdown. Also communicate with teammates via SendMessage.
 ```
 
+### Scheduled tasks
+Scheduled tasks (daily recap, reminders, etc.) are NOT agent teams. When running a scheduled task, just return your output normally — do NOT use `send_message` with a `sender` parameter. The output will be sent from the main bot automatically.
+
 ### Lead agent behavior
 
 As the lead agent who created the team:

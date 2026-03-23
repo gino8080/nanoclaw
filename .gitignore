@@ -15,14 +15,17 @@ groups/*
 !groups/global/
 !groups/telegram_main/
 !groups/telegram_swarm/
+!groups/dev/
 groups/main/*
 groups/global/*
 groups/telegram_main/*
 groups/telegram_swarm/*
+groups/dev/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
 !groups/telegram_main/CLAUDE.md
 !groups/telegram_swarm/CLAUDE.md
+!groups/dev/CLAUDE.md
 
 # Secrets
 *.keys.json

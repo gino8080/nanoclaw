@@ -6,6 +6,9 @@
     {
       "path": "../NANO_CLAW_DATA",
     },
+    {
+      "path": "../../../obsidian-vault",
+    },
   ],
   "settings": {
     "workbench.colorCustomizations": {

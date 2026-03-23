@@ -139,6 +139,125 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* columns already exist */
   }
+
+  // --- FTS5 on messages ---
+  database.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+      content, sender_name,
+      content='messages', content_rowid='rowid'
+    );
+  `);
+  database.exec(`
+    CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+      INSERT INTO messages_fts(rowid, content, sender_name)
+      VALUES (new.rowid, new.content, new.sender_name);
+    END;
+  `);
+  database.exec(`
+    CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, content, sender_name)
+      VALUES ('delete', old.rowid, old.content, old.sender_name);
+    END;
+  `);
+  database.exec(`
+    CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, content, sender_name)
+      VALUES ('delete', old.rowid, old.content, old.sender_name);
+      INSERT INTO messages_fts(rowid, content, sender_name)
+      VALUES (new.rowid, new.content, new.sender_name);
+    END;
+  `);
+
+  // --- Knowledge store ---
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS knowledge (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_folder TEXT NOT NULL,
+      category TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      source TEXT,
+      confidence REAL DEFAULT 1.0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_accessed_at TEXT,
+      expires_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_key
+      ON knowledge(key);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_category
+      ON knowledge(category);
+  `);
+  database.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+      key, value, category,
+      content='knowledge', content_rowid='id'
+    );
+  `);
+  database.exec(`
+    CREATE TRIGGER IF NOT EXISTS knowledge_fts_ai AFTER INSERT ON knowledge BEGIN
+      INSERT INTO knowledge_fts(rowid, key, value, category)
+      VALUES (new.id, new.key, new.value, new.category);
+    END;
+  `);
+  database.exec(`
+    CREATE TRIGGER IF NOT EXISTS knowledge_fts_ad AFTER DELETE ON knowledge BEGIN
+      INSERT INTO knowledge_fts(knowledge_fts, rowid, key, value, category)
+      VALUES ('delete', old.id, old.key, old.value, old.category);
+    END;
+  `);
+  database.exec(`
+    CREATE TRIGGER IF NOT EXISTS knowledge_fts_au AFTER UPDATE ON knowledge BEGIN
+      INSERT INTO knowledge_fts(knowledge_fts, rowid, key, value, category)
+      VALUES ('delete', old.id, old.key, old.value, old.category);
+      INSERT INTO knowledge_fts(rowid, key, value, category)
+      VALUES (new.id, new.key, new.value, new.category);
+    END;
+  `);
+
+  // Backfill FTS index from existing messages (one-time migration)
+  migrateFts(database);
+}
+
+function migrateFts(database: Database.Database): void {
+  // Content-sync FTS5 tables must use 'rebuild' command to populate the index.
+  // Direct INSERT into content-sync tables creates rows but doesn't build the
+  // inverted index, making MATCH queries fail on backfilled data.
+  // We track rebuild state via a simple metadata table to avoid re-running on every startup.
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS _migrations (
+      key TEXT PRIMARY KEY,
+      done_at TEXT NOT NULL
+    )
+  `);
+
+  const ftsRebuilt = database
+    .prepare("SELECT 1 FROM _migrations WHERE key = 'fts_rebuild_v1'")
+    .get();
+  if (ftsRebuilt) return;
+
+  const msgCount = database
+    .prepare('SELECT COUNT(*) as c FROM messages WHERE content IS NOT NULL')
+    .get() as { c: number };
+  if (msgCount.c > 0) {
+    logger.info({ messages: msgCount.c }, 'Rebuilding messages FTS index');
+    database.exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
+  }
+
+  const kCount = database
+    .prepare('SELECT COUNT(*) as c FROM knowledge')
+    .get() as { c: number };
+  if (kCount.c > 0) {
+    logger.info({ entries: kCount.c }, 'Rebuilding knowledge FTS index');
+    database.exec("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')");
+  }
+
+  database
+    .prepare(
+      "INSERT INTO _migrations (key, done_at) VALUES ('fts_rebuild_v1', ?)",
+    )
+    .run(new Date().toISOString());
 }
 
 export function initDatabase(): void {
@@ -306,24 +425,29 @@ export function getNewMessages(
   jids: string[],
   lastTimestamp: string,
   botPrefix: string,
+  limit: number = 200,
 ): { messages: NewMessage[]; newTimestamp: string } {
   if (jids.length === 0) return { messages: [], newTimestamp: lastTimestamp };
 
   const placeholders = jids.map(() => '?').join(',');
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
+  // Subquery takes the N most recent, outer query re-sorts chronologically.
   const sql = `
-    SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
-    FROM messages
-    WHERE timestamp > ? AND chat_jid IN (${placeholders})
-      AND is_bot_message = 0 AND content NOT LIKE ?
-      AND content != '' AND content IS NOT NULL
-    ORDER BY timestamp
+    SELECT * FROM (
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      FROM messages
+      WHERE timestamp > ? AND chat_jid IN (${placeholders})
+        AND is_bot_message = 0 AND content NOT LIKE ?
+        AND content != '' AND content IS NOT NULL
+      ORDER BY timestamp DESC
+      LIMIT ?
+    ) ORDER BY timestamp
   `;
 
   const rows = db
     .prepare(sql)
-    .all(lastTimestamp, ...jids, `${botPrefix}:%`) as NewMessage[];
+    .all(lastTimestamp, ...jids, `${botPrefix}:%`, limit) as NewMessage[];
 
   let newTimestamp = lastTimestamp;
   for (const row of rows) {
@@ -337,20 +461,25 @@ export function getMessagesSince(
   chatJid: string,
   sinceTimestamp: string,
   botPrefix: string,
+  limit: number = 200,
 ): NewMessage[] {
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
+  // Subquery takes the N most recent, outer query re-sorts chronologically.
   const sql = `
-    SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
-    FROM messages
-    WHERE chat_jid = ? AND timestamp > ?
-      AND is_bot_message = 0 AND content NOT LIKE ?
-      AND content != '' AND content IS NOT NULL
-    ORDER BY timestamp
+    SELECT * FROM (
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      FROM messages
+      WHERE chat_jid = ? AND timestamp > ?
+        AND is_bot_message = 0 AND content NOT LIKE ?
+        AND content != '' AND content IS NOT NULL
+      ORDER BY timestamp DESC
+      LIMIT ?
+    ) ORDER BY timestamp
   `;
   return db
     .prepare(sql)
-    .all(chatJid, sinceTimestamp, `${botPrefix}:%`) as NewMessage[];
+    .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
 }
 
 export function createTask(
@@ -607,6 +736,9 @@ export function getRegisteredGroup(
     requiresTrigger:
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
+    useHostRunner: row.container_config
+      ? JSON.parse(row.container_config).useHostRunner === true
+      : undefined,
   };
 }
 
@@ -623,10 +755,22 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.folder,
     group.trigger,
     group.added_at,
-    group.containerConfig ? JSON.stringify(group.containerConfig) : null,
+    group.containerConfig || group.useHostRunner
+      ? JSON.stringify({
+          ...group.containerConfig,
+          ...(group.useHostRunner ? { useHostRunner: true } : {}),
+        })
+      : null,
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
   );
+}
+
+export function deleteRegisteredGroup(jid: string): boolean {
+  const result = db
+    .prepare('DELETE FROM registered_groups WHERE jid = ?')
+    .run(jid);
+  return result.changes > 0;
 }
 
 export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
@@ -649,20 +793,253 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       );
       continue;
     }
+    const parsedConfig = row.container_config
+      ? JSON.parse(row.container_config)
+      : undefined;
     result[row.jid] = {
       name: row.name,
       folder: row.folder,
       trigger: row.trigger_pattern,
       added_at: row.added_at,
-      containerConfig: row.container_config
-        ? JSON.parse(row.container_config)
-        : undefined,
+      containerConfig: parsedConfig,
       requiresTrigger:
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       isMain: row.is_main === 1 ? true : undefined,
+      useHostRunner: parsedConfig?.useHostRunner === true ? true : undefined,
     };
   }
   return result;
+}
+
+// --- FTS5 search ---
+
+export function searchMessagesFts(
+  query: string,
+  chatJid?: string,
+  channel?: string,
+  limit = 20,
+  senderName?: string,
+): NewMessage[] {
+  // Escape FTS5 special characters for safe querying
+  const safeQuery = query.replace(/['"*()]/g, ' ').trim();
+  if (!safeQuery) return [];
+
+  const conditions = ['messages_fts MATCH ?'];
+  const params: unknown[] = [`"${safeQuery}"`];
+
+  if (chatJid) {
+    conditions.push('m.chat_jid = ?');
+    params.push(chatJid);
+  }
+  if (channel) {
+    conditions.push('m.chat_jid IN (SELECT jid FROM chats WHERE channel = ?)');
+    params.push(channel);
+  }
+  if (senderName) {
+    conditions.push('m.sender_name LIKE ?');
+    params.push(`%${senderName}%`);
+  }
+
+  params.push(limit);
+
+  const sql = `
+    SELECT m.id, m.chat_jid, m.sender, m.sender_name, m.content,
+           m.timestamp, m.is_from_me
+    FROM messages_fts
+    JOIN messages m ON m.rowid = messages_fts.rowid
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY bm25(messages_fts, 10.0, 1.0)
+    LIMIT ?
+  `;
+
+  try {
+    return db.prepare(sql).all(...params) as NewMessage[];
+  } catch (err) {
+    // Fallback to LIKE search if FTS query syntax is invalid
+    logger.warn({ query, err }, 'FTS5 query failed, falling back to LIKE');
+    return searchMessages(query, chatJid, channel, limit, senderName);
+  }
+}
+
+// --- Knowledge store ---
+
+export interface KnowledgeEntry {
+  id: number;
+  group_folder: string;
+  category: string;
+  key: string;
+  value: string;
+  source: string | null;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
+  last_accessed_at: string | null;
+  expires_at: string | null;
+}
+
+export function upsertKnowledge(
+  groupFolder: string,
+  key: string,
+  value: string,
+  category: string,
+  source?: string,
+  confidence?: number,
+  expiresAt?: string,
+): { action: 'inserted' | 'updated'; previous_value?: string } {
+  const now = new Date().toISOString();
+
+  // Knowledge is not partitioned — UPSERT by key only
+  const existing = db
+    .prepare('SELECT value FROM knowledge WHERE key = ?')
+    .get(key) as { value: string } | undefined;
+
+  if (existing) {
+    db.prepare(
+      `UPDATE knowledge
+       SET value = ?, category = ?, source = ?, confidence = ?,
+           updated_at = ?, expires_at = ?, group_folder = ?
+       WHERE key = ?`,
+    ).run(
+      value,
+      category,
+      source ?? null,
+      confidence ?? 1.0,
+      now,
+      expiresAt ?? null,
+      groupFolder,
+      key,
+    );
+    return { action: 'updated', previous_value: existing.value };
+  }
+
+  db.prepare(
+    `INSERT INTO knowledge
+     (group_folder, category, key, value, source, confidence, created_at, updated_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    groupFolder,
+    category,
+    key,
+    value,
+    source ?? null,
+    confidence ?? 1.0,
+    now,
+    now,
+    expiresAt ?? null,
+  );
+  return { action: 'inserted' };
+}
+
+export function searchKnowledge(
+  _groupFolder: string,
+  query: string,
+  category?: string,
+  limit = 20,
+): KnowledgeEntry[] {
+  const safeQuery = query.replace(/['"*()]/g, ' ').trim();
+  if (!safeQuery) return [];
+
+  // Knowledge is not partitioned — one user, one memory across all groups
+  const conditions = ['knowledge_fts MATCH ?'];
+  const params: unknown[] = [`"${safeQuery}"`];
+
+  if (category) {
+    conditions.push('k.category = ?');
+    params.push(category);
+  }
+
+  params.push(limit);
+
+  const sql = `
+    SELECT k.*
+    FROM knowledge_fts
+    JOIN knowledge k ON k.id = knowledge_fts.rowid
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY bm25(knowledge_fts, 5.0, 10.0, 1.0)
+    LIMIT ?
+  `;
+
+  try {
+    let results = db.prepare(sql).all(...params) as KnowledgeEntry[];
+
+    // If FTS found nothing, return all knowledge entries as fallback.
+    // The store is small (<100 entries) so the token cost is negligible,
+    // and this lets the agent reason about what it knows even when the
+    // query terms don't match (e.g. "quanti anni ho" vs key "user_birthdate").
+    if (results.length === 0) {
+      const fallbackConditions: string[] = [];
+      const fallbackParams: unknown[] = [];
+      if (category) {
+        fallbackConditions.push('category = ?');
+        fallbackParams.push(category);
+      }
+      fallbackParams.push(limit);
+      const whereClause =
+        fallbackConditions.length > 0
+          ? `WHERE ${fallbackConditions.join(' AND ')}`
+          : '';
+      results = db
+        .prepare(
+          `SELECT * FROM knowledge ${whereClause} ORDER BY updated_at DESC LIMIT ?`,
+        )
+        .all(...fallbackParams) as KnowledgeEntry[];
+    }
+
+    // Update last_accessed_at for returned entries
+    if (results.length > 0) {
+      const now = new Date().toISOString();
+      const ids = results.map((r) => r.id);
+      db.prepare(
+        `UPDATE knowledge SET last_accessed_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`,
+      ).run(now, ...ids);
+    }
+    return results;
+  } catch (err) {
+    logger.warn({ query, err }, 'Knowledge FTS query failed');
+    return [];
+  }
+}
+
+export function listKnowledge(
+  _groupFolder: string,
+  category?: string,
+  prefix?: string,
+  onlyExpired?: boolean,
+  limit = 50,
+): KnowledgeEntry[] {
+  // Knowledge is not partitioned — one user, one memory across all groups
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (category) {
+    conditions.push('category = ?');
+    params.push(category);
+  }
+  if (prefix) {
+    conditions.push('key LIKE ?');
+    params.push(`${prefix}%`);
+  }
+  if (onlyExpired) {
+    conditions.push('expires_at IS NOT NULL AND expires_at <= ?');
+    params.push(new Date().toISOString());
+  }
+
+  params.push(limit);
+
+  const whereClause =
+    conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  return db
+    .prepare(
+      `SELECT * FROM knowledge ${whereClause}
+       ORDER BY updated_at DESC LIMIT ?`,
+    )
+    .all(...params) as KnowledgeEntry[];
+}
+
+export function deleteKnowledge(_groupFolder: string, key: string): boolean {
+  // Knowledge is not partitioned — delete by key only
+  const result = db.prepare('DELETE FROM knowledge WHERE key = ?').run(key);
+  return result.changes > 0;
 }
 
 // --- JSON migration ---

@@ -10,8 +10,13 @@ import path from 'path';
 import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
+  CONTAINER_MEMORY,
   CONTAINER_TIMEOUT,
+  CONTAINER_WATCHDOG_TIMEOUT,
+  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
+  GIT_TOKENS_DIR,
+  GITHUB_TOKEN_PATH,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   TIMEZONE,
@@ -21,10 +26,13 @@ import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
+  hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
+import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { getCachedToken } from './oauth-keychain.js';
 import { RegisteredGroup } from './types.js';
@@ -78,16 +86,12 @@ function buildVolumeMounts(
       readonly: true,
     });
 
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Secrets are passed via stdin instead (see readSecrets()).
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
+    // Shadow .env: the project root is mounted read-only, so the .env inside
+    // it is already inaccessible for writes. The credential proxy handles auth.
+    // On Docker you could shadow with /dev/null, but Apple Container only
+    // supports directory mounts — so we skip the shadow mount entirely.
+    // The .env is readable but contains no secrets useful to the container
+    // since auth goes through the credential proxy.
 
     // Main also gets its group folder as the working directory
     mounts.push({
@@ -175,6 +179,16 @@ function buildVolumeMounts(
     });
   }
 
+  // Google Calendar OAuth credentials — read-write for token refresh
+  const gcalDir = path.join(os.homedir(), '.gcalendar-mcp');
+  if (fs.existsSync(gcalDir)) {
+    mounts.push({
+      hostPath: gcalDir,
+      containerPath: '/home/node/.gcalendar-mcp',
+      readonly: false,
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
@@ -228,25 +242,16 @@ function buildVolumeMounts(
 }
 
 /**
- * Read allowed secrets from .env for passing to the container via stdin.
- * Secrets are never written to disk or mounted as files.
- * OAuth token is read from a local cache file (written by /login command).
+ * Read non-Anthropic secrets from .env for passing to the container via stdin.
+ * Anthropic auth is handled by the credential proxy — these are for other services.
  */
 function readSecrets(): Record<string, string> {
   const envSecrets = readEnvFile([
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'ANTHROPIC_API_KEY',
-    'ANTHROPIC_BASE_URL',
-    'ANTHROPIC_AUTH_TOKEN',
     'IMAGE_WEBHOOK_URL',
     'GOOGLE_MAPS_API_KEY',
+    'FIRECRAWL_API_KEY',
+    'NANOCLAW_CALENDAR_ID',
   ]);
-
-  // Try cached token (written by /login command) — overrides .env
-  const cachedToken = getCachedToken();
-  if (cachedToken) {
-    envSecrets.CLAUDE_CODE_OAUTH_TOKEN = cachedToken;
-  }
 
   return envSecrets;
 }
@@ -254,8 +259,17 @@ function readSecrets(): Record<string, string> {
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  isMain: boolean,
 ): string[] {
-  const args: string[] = ['run', '-i', '--rm', '--name', containerName];
+  const args: string[] = [
+    'run',
+    '-i',
+    '--rm',
+    '--name',
+    containerName,
+    '-m',
+    `${CONTAINER_MEMORY}MB`,
+  ];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
@@ -263,13 +277,94 @@ function buildContainerArgs(
   // Public base URL for generating links to served files
   args.push('-e', `PUBLIC_BASE_URL=${PUBLIC_BASE_URL}`);
 
+  // Route API traffic through the credential proxy (containers never see real secrets)
+  args.push(
+    '-e',
+    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+  );
+
+  // Mirror the host's auth method with a placeholder value.
+  // API key mode: SDK sends x-api-key, proxy replaces with real key.
+  // OAuth mode:   SDK exchanges placeholder token for temp API key,
+  //               proxy injects real OAuth token on that exchange request.
+  const authMode = detectAuthMode();
+  if (authMode === 'api-key') {
+    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+  } else {
+    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Git tokens for multi-host authentication (push, PR via gh/glab CLI)
+  // Reads from ~/.config/nanoclaw/git-tokens/{hostname} files.
+  // Falls back to legacy ~/.config/nanoclaw/.github-token for GitHub.
+  const gitCredentials: Array<{ host: string; token: string }> = [];
+  try {
+    if (fs.existsSync(GIT_TOKENS_DIR)) {
+      for (const file of fs.readdirSync(GIT_TOKENS_DIR)) {
+        if (file.startsWith('.')) continue;
+        const token = fs
+          .readFileSync(path.join(GIT_TOKENS_DIR, file), 'utf-8')
+          .trim();
+        if (token) gitCredentials.push({ host: file, token });
+      }
+    }
+    // Legacy fallback: single .github-token file
+    if (
+      !gitCredentials.some((c) => c.host === 'github.com') &&
+      fs.existsSync(GITHUB_TOKEN_PATH)
+    ) {
+      const ghToken = fs.readFileSync(GITHUB_TOKEN_PATH, 'utf-8').trim();
+      if (ghToken) gitCredentials.push({ host: 'github.com', token: ghToken });
+    }
+  } catch {
+    logger.debug('Git tokens not found or unreadable, skipping');
+  }
+
+  // Pass GitHub token as env var for gh CLI (it requires GH_TOKEN env)
+  const ghCred = gitCredentials.find((c) => c.host === 'github.com');
+  if (ghCred) {
+    args.push('-e', `GITHUB_TOKEN=${ghCred.token}`);
+    args.push('-e', `GH_TOKEN=${ghCred.token}`);
+  }
+
+  // Pass GitLab tokens as env vars for glab CLI
+  // glab uses GITLAB_TOKEN — if multiple GitLab hosts, use GITLAB_HOST to set default
+  const gitlabCreds = gitCredentials.filter(
+    (c) => c.host !== 'github.com' && c.host.includes('gitlab'),
+  );
+  if (gitlabCreds.length > 0) {
+    // Use the first GitLab token as default GITLAB_TOKEN
+    args.push('-e', `GITLAB_TOKEN=${gitlabCreds[0].token}`);
+    args.push('-e', `GITLAB_HOST=https://${gitlabCreds[0].host}`);
+    // Pass all GitLab host configs for glab multi-instance
+    for (const cred of gitlabCreds) {
+      const envKey = `GITLAB_TOKEN_${cred.host.replace(/[.-]/g, '_').toUpperCase()}`;
+      args.push('-e', `${envKey}=${cred.token}`);
+    }
+  }
+
+  // Pass all git credentials as JSON for the credential helper
+  if (gitCredentials.length > 0) {
+    args.push('-e', `GIT_CREDENTIALS=${JSON.stringify(gitCredentials)}`);
+  }
+
+  // Runtime-specific args for host gateway resolution
+  args.push(...hostGatewayArgs());
+
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),
   // or when getuid is unavailable (native Windows without WSL).
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
+    if (isMain) {
+      // Main containers start as root so the entrypoint can mount --bind
+      // to shadow .env. Privileges are dropped via setpriv in entrypoint.sh.
+      args.push('-e', `RUN_UID=${hostUid}`);
+      args.push('-e', `RUN_GID=${hostGid}`);
+    } else {
+      args.push('--user', `${hostUid}:${hostGid}`);
+    }
     args.push('-e', 'HOME=/home/node');
   }
 
@@ -286,6 +381,81 @@ function buildContainerArgs(
   return args;
 }
 
+function writeWorkspaceManifest(groupFolder: string): void {
+  const groupDir = resolveGroupFolderPath(groupFolder);
+  const ipcDir = resolveGroupIpcPath(groupFolder);
+  fs.mkdirSync(ipcDir, { recursive: true });
+
+  interface ManifestEntry {
+    path: string;
+    size_kb: number;
+    modified: string;
+    heading?: string;
+  }
+
+  const entries: ManifestEntry[] = [];
+  const MAX_FILES = 50;
+
+  function scanDir(dir: string, prefix: string): void {
+    let items: string[];
+    try {
+      items = fs.readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const item of items) {
+      if (item.startsWith('.')) continue;
+      const fullPath = path.join(dir, item);
+      const relPath = prefix ? `${prefix}/${item}` : item;
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        // Skip logs directory — not useful for memory recall
+        if (item === 'logs') continue;
+        scanDir(fullPath, relPath);
+      } else if (stat.isFile()) {
+        const entry: ManifestEntry = {
+          path: relPath,
+          size_kb: Math.round(stat.size / 1024),
+          modified: stat.mtime.toISOString().split('T')[0],
+        };
+        // Extract heading from .md files
+        if (item.endsWith('.md')) {
+          try {
+            const content = fs.readFileSync(fullPath, 'utf-8');
+            const firstLine = content.split('\n').find((l) => l.trim());
+            if (firstLine) {
+              entry.heading = firstLine.trim().slice(0, 100);
+            }
+          } catch {
+            // Ignore read errors
+          }
+        }
+        entries.push(entry);
+      }
+    }
+  }
+
+  scanDir(groupDir, '');
+
+  // Sort by modified DESC, cap at MAX_FILES
+  entries.sort((a, b) => b.modified.localeCompare(a.modified));
+  const manifest = {
+    generated_at: new Date().toISOString(),
+    files: entries.slice(0, MAX_FILES),
+    total_files: entries.length,
+  };
+
+  const manifestPath = path.join(ipcDir, 'workspace_manifest.json');
+  const tmpPath = `${manifestPath}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(manifest, null, 2));
+  fs.renameSync(tmpPath, manifestPath);
+}
+
 export async function runContainerAgent(
   group: RegisteredGroup,
   input: ContainerInput,
@@ -297,10 +467,13 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
+  // Write workspace manifest for file discovery by the agent
+  writeWorkspaceManifest(group.folder);
+
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerArgs = buildContainerArgs(mounts, containerName, input.isMain);
 
   logger.debug(
     {
@@ -343,11 +516,9 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
-    // Pass secrets via stdin (never written to disk or mounted as files)
+    // Pass input (including non-Anthropic secrets) via stdin
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
-    // Remove secrets from input so they don't appear in logs
-    delete input.secrets;
 
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive
     let parseBuffer = '';
@@ -392,7 +563,7 @@ export async function runContainerAgent(
             }
             hadStreamingOutput = true;
             // Activity detected — reset the hard timeout
-            resetTimeout();
+            resetWatchdog();
             // Call onOutput for all markers (including null results)
             // so idle timers start even for "silent" query completions.
             outputChain = outputChain.then(() => onOutput(parsed));
@@ -431,14 +602,14 @@ export async function runContainerAgent(
     let timedOut = false;
     let hadStreamingOutput = false;
     const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
-    // Grace period: hard timeout must be at least IDLE_TIMEOUT + 30s so the
-    // graceful _close sentinel has time to trigger before the hard kill fires.
-    const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
+    // Hard timeout: absolute max lifetime, never resets.
+    const hardTimeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
 
-    const killOnTimeout = () => {
+    const gracefulKill = (reason: string) => {
+      if (timedOut) return; // already killing
       timedOut = true;
       logger.error(
-        { group: group.name, containerName },
+        { group: group.name, containerName, reason },
         'Container timeout, stopping gracefully',
       );
       exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
@@ -452,16 +623,29 @@ export async function runContainerAgent(
       });
     };
 
-    let timeout = setTimeout(killOnTimeout, timeoutMs);
+    // Hard timeout — absolute lifetime cap, never resets
+    const hardTimeout = setTimeout(
+      () => gracefulKill('hard timeout'),
+      hardTimeoutMs,
+    );
 
-    // Reset the timeout whenever there's activity (streaming output)
-    const resetTimeout = () => {
-      clearTimeout(timeout);
-      timeout = setTimeout(killOnTimeout, timeoutMs);
+    // Watchdog — resets on every output; kills if container goes silent too long
+    let watchdog = setTimeout(
+      () => gracefulKill('watchdog (no output)'),
+      CONTAINER_WATCHDOG_TIMEOUT,
+    );
+
+    const resetWatchdog = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(
+        () => gracefulKill('watchdog (no output)'),
+        CONTAINER_WATCHDOG_TIMEOUT,
+      );
     };
 
     container.on('close', (code) => {
-      clearTimeout(timeout);
+      clearTimeout(hardTimeout);
+      clearTimeout(watchdog);
       const duration = Date.now() - startTime;
 
       if (timedOut) {
@@ -656,7 +840,8 @@ export async function runContainerAgent(
     });
 
     container.on('error', (err) => {
-      clearTimeout(timeout);
+      clearTimeout(hardTimeout);
+      clearTimeout(watchdog);
       logger.error(
         { group: group.name, containerName, error: err },
         'Container spawn error',
