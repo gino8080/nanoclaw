@@ -4,15 +4,22 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  ASSISTANT_NAME,
+  DATA_DIR,
+  IPC_POLL_INTERVAL,
+  TIMEZONE,
+} from './config.js';
 import {
   sendPoolDocument,
   sendPoolMessage,
   sendPoolPhoto,
 } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
+import { readEnvFile } from './env.js';
 import {
   createTask,
+  deleteRegisteredGroup,
   deleteTask,
   deleteKnowledge,
   getRegisteredGroup,
@@ -25,7 +32,10 @@ import {
   updateTask,
   upsertKnowledge,
 } from './db.js';
-import { isValidGroupFolder } from './group-folder.js';
+import {
+  isValidGroupFolder,
+  resolveGroupFolderPath,
+} from './group-folder.js';
 import { processListOperation } from './lists.js';
 import { logger } from './logger.js';
 import { validateMount } from './mount-security.js';
@@ -348,6 +358,10 @@ export async function processTaskIpc(
     groupJid?: string;
     // For list_projects
     rootPath?: string;
+    // For register_discord_project / unregister_discord_project
+    guildId?: string;
+    channelName?: string;
+    discordChannelId?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -1292,7 +1306,306 @@ export async function processTaskIpc(
       break;
     }
 
+    case 'register_discord_project': {
+      if (!isMain) {
+        writeIpcResponse(
+          sourceGroup,
+          'project_responses',
+          data.requestId || '',
+          { success: false, error: 'Only main group can register projects' },
+        );
+        break;
+      }
+      if (!data.requestId || !data.projectPath) {
+        logger.warn({ data }, 'Invalid register_discord_project request');
+        break;
+      }
+
+      const envVars = readEnvFile(['DISCORD_BOT_TOKEN']);
+      const botToken =
+        process.env.DISCORD_BOT_TOKEN || envVars.DISCORD_BOT_TOKEN || '';
+      if (!botToken) {
+        writeIpcResponse(
+          sourceGroup,
+          'project_responses',
+          data.requestId,
+          { success: false, error: 'DISCORD_BOT_TOKEN not configured' },
+        );
+        break;
+      }
+
+      const envVarsGuild = readEnvFile(['DISCORD_GUILD_ID']);
+      const regGuildId =
+        data.guildId ||
+        process.env.DISCORD_GUILD_ID ||
+        envVarsGuild.DISCORD_GUILD_ID ||
+        '';
+      if (!regGuildId) {
+        writeIpcResponse(
+          sourceGroup,
+          'project_responses',
+          data.requestId,
+          {
+            success: false,
+            error:
+              'guildId is required. Set DISCORD_GUILD_ID in .env or pass it explicitly.',
+          },
+        );
+        break;
+      }
+
+      // Validate the project path is in the allowlist
+      const regMountDef: AdditionalMount = {
+        hostPath: data.projectPath,
+        readonly: false,
+      };
+      const regMountCheck = validateMount(regMountDef, true);
+      if (!regMountCheck.allowed) {
+        writeIpcResponse(
+          sourceGroup,
+          'project_responses',
+          data.requestId,
+          { success: false, error: `Path not allowed: ${regMountCheck.reason}` },
+        );
+        break;
+      }
+
+      // Derive names from the project path
+      const projectBasename = path.basename(data.projectPath);
+      const discordChannelName =
+        data.channelName || projectBasename.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      const groupFolder = `discord_${discordChannelName.replace(/-/g, '_')}`;
+
+      // Check if folder already registered
+      const existingFolders = new Set(
+        Object.values(registeredGroups).map((g) => g.folder),
+      );
+      if (existingFolders.has(groupFolder)) {
+        writeIpcResponse(
+          sourceGroup,
+          'project_responses',
+          data.requestId,
+          { success: false, error: `Group folder '${groupFolder}' already exists` },
+        );
+        break;
+      }
+
+      try {
+        // Create Discord channel via REST API
+        const createRes = await fetch(
+          `https://discord.com/api/v10/guilds/${regGuildId}/channels`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bot ${botToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              name: discordChannelName,
+              type: 0, // GUILD_TEXT
+              topic: `NanoClaw project: ${data.projectPath}`,
+            }),
+          },
+        );
+
+        if (!createRes.ok) {
+          const errBody = await createRes.text();
+          writeIpcResponse(
+            sourceGroup,
+            'project_responses',
+            data.requestId,
+            {
+              success: false,
+              error: `Discord API error ${createRes.status}: ${errBody}`,
+            },
+          );
+          break;
+        }
+
+        const channelData = (await createRes.json()) as { id: string; name: string };
+        const newJid = `dc:${channelData.id}`;
+
+        // Register the group in NanoClaw
+        const newGroup: RegisteredGroup = {
+          name: `Discord #${channelData.name}`,
+          folder: groupFolder,
+          trigger: `@${ASSISTANT_NAME}`,
+          added_at: new Date().toISOString(),
+          requiresTrigger: false,
+          isMain: false,
+          containerConfig: {
+            additionalMounts: [
+              {
+                hostPath: data.projectPath,
+                containerPath: projectBasename,
+                readonly: false,
+              },
+            ],
+          },
+        };
+        deps.registerGroup(newJid, newGroup);
+
+        // Create CLAUDE.md from template
+        const groupDir = resolveGroupFolderPath(groupFolder);
+        const claudeMdPath = path.join(groupDir, 'CLAUDE.md');
+        if (!fs.existsSync(claudeMdPath)) {
+          const template = generateDiscordProjectClaudeMd(
+            projectBasename,
+            data.projectPath,
+          );
+          fs.writeFileSync(claudeMdPath, template, 'utf-8');
+        }
+
+        writeIpcResponse(
+          sourceGroup,
+          'project_responses',
+          data.requestId,
+          {
+            success: true,
+            channelId: channelData.id,
+            channelName: channelData.name,
+            jid: newJid,
+            folder: groupFolder,
+            containerPath: `/workspace/extra/${projectBasename}`,
+          },
+        );
+
+        logger.info(
+          {
+            sourceGroup,
+            projectPath: data.projectPath,
+            discordChannel: channelData.name,
+            jid: newJid,
+            folder: groupFolder,
+          },
+          'Discord project registered via IPC',
+        );
+      } catch (err) {
+        writeIpcResponse(
+          sourceGroup,
+          'project_responses',
+          data.requestId,
+          {
+            success: false,
+            error: `Failed: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        );
+      }
+      break;
+    }
+
+    case 'unregister_discord_project': {
+      if (!isMain) {
+        writeIpcResponse(
+          sourceGroup,
+          'project_responses',
+          data.requestId || '',
+          { success: false, error: 'Only main group can unregister projects' },
+        );
+        break;
+      }
+      if (!data.requestId || !data.discordChannelId) {
+        logger.warn({ data }, 'Invalid unregister_discord_project request');
+        break;
+      }
+
+      const unregJid = `dc:${data.discordChannelId}`;
+      const unregGroup = registeredGroups[unregJid];
+      if (!unregGroup) {
+        writeIpcResponse(
+          sourceGroup,
+          'project_responses',
+          data.requestId,
+          { success: false, error: `No group registered for ${unregJid}` },
+        );
+        break;
+      }
+
+      // Stop any running container
+      if (deps.stopGroup) {
+        deps.stopGroup(unregJid);
+      }
+
+      // Remove from DB and in-memory state
+      try {
+        deleteRegisteredGroup(unregJid);
+        delete registeredGroups[unregJid];
+      } catch (err) {
+        logger.error({ err, jid: unregJid }, 'Failed to delete group from DB');
+      }
+
+      writeIpcResponse(
+        sourceGroup,
+        'project_responses',
+        data.requestId,
+        {
+          success: true,
+          jid: unregJid,
+          folder: unregGroup.folder,
+          note: 'Group unregistered. Discord channel NOT deleted — remove it manually if needed.',
+        },
+      );
+
+      logger.info(
+        { jid: unregJid, folder: unregGroup.folder },
+        'Discord project unregistered via IPC',
+      );
+      break;
+    }
+
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
   }
+}
+
+function generateDiscordProjectClaudeMd(
+  projectName: string,
+  projectPath: string,
+): string {
+  return `# Discord Project Agent — ${projectName}
+
+You are a development agent for the **${projectName}** project, accessed via Discord. Direct, precise, no bullshit.
+
+Generic rules (communication, workspace, memory, formatting) are in \`/workspace/global/CLAUDE.md\`. This file only contains project-specific overrides.
+
+## Project
+
+The project is mounted at \`/workspace/extra/${projectName}\`. Always \`cd\` there before working.
+
+## Personality
+
+- Technical, concise, zero sarcasm. Output is code-focused.
+- No emoji. No filler. Report what you did, what changed, what failed.
+- When asked to do a task, do it. Don't ask for confirmation unless the plan explicitly requires it (e.g., before pushing).
+
+## Message Formatting
+
+Use standard Markdown (Discord renders it natively):
+- **bold** for emphasis
+- \\\`backticks\\\` for inline code
+- \\\`\\\`\\\`triple backticks\\\`\\\`\\\` for code blocks (with language tag)
+- Keep messages under 1900 chars when possible (Discord limit is 2000)
+
+## Regole di sicurezza (NON NEGOZIABILI)
+
+1. MAI committare o pushare su main/master. SEMPRE branch dedicato.
+2. Nome branch: \`nanoclaw/{descrizione-breve}\`
+3. SEMPRE crea una PR. Mai push diretto su branch protetti.
+4. PRIMA di pushare, chiedi conferma in chat. Mostra:
+   - Branch name
+   - File modificati (lista)
+   - Diff riassuntivo (max 20 righe)
+   - Attendi "ok" o "push" esplicito dall'utente
+5. Commit message: descrittivo, in inglese.
+
+## Workflow codice
+
+1. \`cd /workspace/extra/${projectName}\`
+2. \`git fetch origin && git checkout -b nanoclaw/{task} origin/main\`
+3. Fai le modifiche
+4. \`git add\` (file specifici, mai \`-A\`) + \`git commit\`
+5. Mostra diff e chiedi conferma
+6. Solo dopo conferma: \`git push -u origin nanoclaw/{task}\` + \`gh pr create\`
+7. Condividi link PR in chat
+`;
 }

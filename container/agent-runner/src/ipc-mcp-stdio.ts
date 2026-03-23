@@ -1798,6 +1798,174 @@ The session runs independently until the user or a timeout closes it.`,
   },
 );
 
+server.tool(
+  'register_discord_project',
+  `Register a project from ~/PROJECTS as a dedicated Discord channel.
+Creates a new text channel in the Discord server and registers a NanoClaw group for it.
+The project will be mounted read-write in the new group's container.
+Use list_available_projects first to find the project path.
+Only available from the main group.`,
+  {
+    project_path: z
+      .string()
+      .describe(
+        'Absolute path or ~/relative path to the project (e.g., ~/PROJECTS/PERSONAL/my-app)',
+      ),
+    guild_id: z
+      .string()
+      .optional()
+      .describe(
+        'Discord server (guild) ID. Optional if DISCORD_GUILD_ID is set in .env.',
+      ),
+    channel_name: z
+      .string()
+      .optional()
+      .describe(
+        'Custom Discord channel name (default: derived from project folder name)',
+      ),
+  },
+  async (args: {
+    project_path: string;
+    guild_id?: string;
+    channel_name?: string;
+  }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'register_discord_project',
+      requestId,
+      projectPath: args.project_path,
+      guildId: args.guild_id,
+      channelName: args.channel_name,
+      groupFolder,
+      chatJid,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollProjectResponse(
+      'project_responses',
+      requestId,
+    )) as {
+      success: boolean;
+      error?: string;
+      channelId?: string;
+      channelName?: string;
+      jid?: string;
+      folder?: string;
+      containerPath?: string;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Register Discord project timed out.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Registration failed: ${result.error}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: [
+            `Discord project registered:`,
+            `- Channel: #${result.channelName} (${result.channelId})`,
+            `- Group: ${result.folder}`,
+            `- Project mount: ${result.containerPath}`,
+            ``,
+            `Send a message in #${result.channelName} to start working on the project.`,
+          ].join('\n'),
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'unregister_discord_project',
+  `Remove a Discord project registration.
+Stops the container and removes the NanoClaw group.
+Does NOT delete the Discord channel (do that manually).
+Only available from the main group.`,
+  {
+    discord_channel_id: z
+      .string()
+      .describe('The Discord channel ID to unregister'),
+  },
+  async (args: { discord_channel_id: string }) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'unregister_discord_project',
+      requestId,
+      discordChannelId: args.discord_channel_id,
+      groupFolder,
+      chatJid,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = (await pollProjectResponse(
+      'project_responses',
+      requestId,
+    )) as {
+      success: boolean;
+      error?: string;
+      jid?: string;
+      folder?: string;
+      note?: string;
+    } | null;
+
+    if (!result) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Unregister Discord project timed out.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Unregister failed: ${result.error}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Project unregistered: ${result.folder}\n${result.note || ''}`,
+        },
+      ],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
