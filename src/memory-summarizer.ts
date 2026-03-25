@@ -101,8 +101,7 @@ export async function summarizeSearchResults(
       'contextualized summary (2-4 sentences) that answers the query. ' +
       'Focus on the most relevant facts. Use the same language as the query.';
 
-    const userMessage =
-      `Query: "${query}"\n\nSearch results:\n${truncated}`;
+    const userMessage = `Query: "${query}"\n\nSearch results:\n${truncated}`;
 
     const summary = await callAnthropic(apiKey, systemPrompt, userMessage);
     return { summary: summary || null };
