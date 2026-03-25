@@ -73,8 +73,8 @@ interface RegisterGroupArgs {
 interface UpdateTaskArgs {
   task_id: string;
   prompt?: string;
-  schedule_type: 'cron' | 'interval' | 'once';
-  schedule_value: string;
+  schedule_type?: 'cron' | 'interval' | 'once';
+  schedule_value?: string;
 }
 
 interface ManageListArgs {
