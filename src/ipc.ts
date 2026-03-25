@@ -35,6 +35,7 @@ import {
 import { isValidGroupFolder, resolveGroupFolderPath } from './group-folder.js';
 import { processListOperation } from './lists.js';
 import { logger } from './logger.js';
+import { summarizeSearchResults } from './memory-summarizer.js';
 import { validateMount } from './mount-security.js';
 import { AdditionalMount, RegisteredGroup } from './types.js';
 
@@ -697,6 +698,12 @@ export async function processTaskIpc(
         data.senderName,
       );
 
+      // Summarize results with LLM (non-blocking, graceful degradation)
+      const searchSummary = await summarizeSearchResults(
+        data.query,
+        searchResults,
+      );
+
       const searchResponseDir = path.join(
         DATA_DIR,
         'ipc',
@@ -711,7 +718,11 @@ export async function processTaskIpc(
       const searchTmpPath = `${searchResponsePath}.tmp`;
       fs.writeFileSync(
         searchTmpPath,
-        JSON.stringify({ success: true, results: searchResults }),
+        JSON.stringify({
+          success: true,
+          results: searchResults,
+          ...(searchSummary.summary && { summary: searchSummary.summary }),
+        }),
       );
       fs.renameSync(searchTmpPath, searchResponsePath);
 
@@ -720,6 +731,7 @@ export async function processTaskIpc(
           requestId: data.requestId,
           query: data.query,
           resultCount: searchResults.length,
+          hasSummary: !!searchSummary.summary,
           sourceGroup,
         },
         'Search messages processed',
@@ -759,6 +771,13 @@ export async function processTaskIpc(
         );
       }
 
+      // Summarize combined results with LLM
+      const allMemResults = [...knowledgeResults, ...messageResults];
+      const memSummary = await summarizeSearchResults(
+        data.query,
+        allMemResults,
+      );
+
       const memResponseDir = path.join(
         DATA_DIR,
         'ipc',
@@ -777,6 +796,7 @@ export async function processTaskIpc(
           success: true,
           knowledge: knowledgeResults,
           messages: messageResults,
+          ...(memSummary.summary && { summary: memSummary.summary }),
         }),
       );
       fs.renameSync(memTmpPath, memResponsePath);
@@ -788,6 +808,7 @@ export async function processTaskIpc(
           scope,
           knowledgeCount: knowledgeResults.length,
           messageCount: messageResults.length,
+          hasSummary: !!memSummary.summary,
           sourceGroup,
         },
         'Memory search processed',

@@ -6,10 +6,10 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { z } from 'zod';
+import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 import path from 'path';
-import { CronExpressionParser } from 'cron-parser';
+import { z } from 'zod';
 
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
@@ -68,6 +68,13 @@ interface RegisterGroupArgs {
   name: string;
   folder: string;
   trigger: string;
+}
+
+interface UpdateTaskArgs {
+  task_id: string;
+  prompt?: string;
+  schedule_type: 'cron' | 'interval' | 'once';
+  schedule_value: string;
 }
 
 interface ManageListArgs {
@@ -731,7 +738,7 @@ server.tool(
       .optional()
       .describe('New schedule value (see schedule_task for format)'),
   },
-  async (args) => {
+  async (args: UpdateTaskArgs) => {
     // Validate schedule_value if provided
     if (
       args.schedule_type === 'cron' ||
@@ -1061,6 +1068,7 @@ Results are ordered by most recent first.`,
               content: string;
               timestamp: string;
             }>;
+            summary?: string;
           };
           fs.unlinkSync(responsePath);
 
@@ -1082,11 +1090,15 @@ Results are ordered by most recent first.`,
             )
             .join('\n\n');
 
+          const summaryBlock = result.summary
+            ? `\n\nSummary: ${result.summary}`
+            : '';
+
           return {
             content: [
               {
                 type: 'text' as const,
-                text: `Found ${result.results.length} messages:\n\n${formatted}`,
+                text: `Found ${result.results.length} messages:${summaryBlock}\n\n${formatted}`,
               },
             ],
           };
@@ -1196,6 +1208,7 @@ Tip: use word stems for better Italian recall (e.g. "compra" instead of "comprat
         timestamp: string;
         chat_jid: string;
       }>;
+      summary?: string;
     } | null;
 
     if (!result) {
@@ -1206,6 +1219,10 @@ Tip: use word stems for better Italian recall (e.g. "compra" instead of "comprat
     }
 
     const parts: string[] = [];
+
+    if (result.summary) {
+      parts.push(`## Summary\n${result.summary}`);
+    }
 
     if (result.knowledge?.length > 0) {
       parts.push('## Knowledge Store');
