@@ -9,23 +9,25 @@ store/
 data/
 logs/
 
-# Groups - only track base structure and specific CLAUDE.md files
+# Groups - only track base structure, CLAUDE.md, USER.md, and skills/
 groups/*
 !groups/main/
 !groups/global/
 !groups/telegram_main/
 !groups/telegram_swarm/
 !groups/dev/
+!groups/discord_main/
+!groups/discord_nanoclaw/
 groups/main/*
 groups/global/*
 groups/telegram_main/*
 groups/telegram_swarm/*
 groups/dev/*
-!groups/main/CLAUDE.md
-!groups/global/CLAUDE.md
-!groups/telegram_main/CLAUDE.md
-!groups/telegram_swarm/CLAUDE.md
-!groups/dev/CLAUDE.md
+groups/discord_main/*
+groups/discord_nanoclaw/*
+!groups/*/CLAUDE.md
+!groups/*/USER.md
+!groups/*/skills/
 
 # Secrets
 *.keys.json
