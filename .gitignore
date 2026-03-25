@@ -9,26 +9,17 @@ store/
 data/
 logs/
 
-# Groups - only track base structure, CLAUDE.md, USER.md, and skills/
-groups/*
-!groups/main/
-!groups/global/
-!groups/telegram_main/
-!groups/telegram_swarm/
-!groups/dev/
-!groups/discord_main/
-!groups/discord_nanoclaw/
-groups/main/*
-groups/global/*
-groups/telegram_main/*
-groups/telegram_swarm/*
-groups/dev/*
-groups/discord_main/*
-groups/discord_nanoclaw/*
-!groups/*/CLAUDE.md
-!groups/*/USER.md
-!groups/*/skills/
-
+# Groups - ignore all contents, whitelist CLAUDE.md, USER.md, skills/
+# Step 1: ignore everything inside every group
+groups/**
+# Step 2: re-allow traversal into group subdirs (required for negation to work)
+!groups/*/
+# Step 3: whitelist the files we want tracked
+!groups/**/CLAUDE.md
+!groups/**/USER.md
+!groups/**/skills/
+!groups/**/skills/**
+ 
 # Secrets
 *.keys.json
 *.apps.googleusercontent.com.json
