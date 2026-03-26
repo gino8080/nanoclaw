@@ -3,6 +3,7 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { isTokenExpiringSoon, refreshAndCacheToken } from './oauth-keychain.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -79,6 +80,19 @@ async function runTask(
   task: ScheduledTask,
   deps: SchedulerDependencies,
 ): Promise<void> {
+  // Pre-flight: ensure OAuth token is fresh before spawning a container.
+  // Without this, scheduled tasks that run after token expiry (e.g. overnight)
+  // would fail to access Google Calendar, Maps, etc.
+  if (isTokenExpiringSoon()) {
+    const refreshResult = await refreshAndCacheToken();
+    if (!refreshResult.success) {
+      logger.warn(
+        { taskId: task.id, message: refreshResult.message },
+        'Pre-task OAuth refresh failed',
+      );
+    }
+  }
+
   const startTime = Date.now();
   let groupDir: string;
   try {

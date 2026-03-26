@@ -70,13 +70,6 @@ interface RegisterGroupArgs {
   trigger: string;
 }
 
-interface UpdateTaskArgs {
-  task_id: string;
-  prompt?: string;
-  schedule_type?: 'cron' | 'interval' | 'once';
-  schedule_value?: string;
-}
-
 interface ManageListArgs {
   action:
     | 'add'
@@ -738,7 +731,7 @@ server.tool(
       .optional()
       .describe('New schedule value (see schedule_task for format)'),
   },
-  async (args: UpdateTaskArgs) => {
+  async (args) => {
     // Validate schedule_value if provided
     if (
       args.schedule_type === 'cron' ||

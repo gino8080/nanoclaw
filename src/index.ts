@@ -37,6 +37,7 @@ import {
   getAllTasks,
   getMessagesSince,
   getNewMessages,
+  getRecentMessages,
   getRegisteredGroup,
   getRouterState,
   initDatabase,
@@ -205,7 +206,18 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
+  // Context primer: include recent conversation history so the agent has
+  // continuity even after a container restart (cursor already advanced past
+  // these messages, but the agent needs them for context).
+  const recentContext = getRecentMessages(chatJid, 10);
+  // Filter out messages that are already in missedMessages to avoid duplicates
+  const missedIds = new Set(missedMessages.map((m) => m.id));
+  const contextOnly = recentContext.filter((m) => !missedIds.has(m.id));
+  const contextBlock =
+    contextOnly.length > 0
+      ? `<recent_context>\nRecent conversation for continuity (you already responded to these):\n${formatMessages(contextOnly, TIMEZONE)}\n</recent_context>\n\n`
+      : '';
+  const prompt = contextBlock + formatMessages(missedMessages, TIMEZONE);
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.

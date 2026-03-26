@@ -41,93 +41,60 @@ Files you create are saved in `/workspace/group/`. Use this for notes, research,
 
 ## Memory
 
-You have a long-term memory system with three layers:
+You have 3 levels of memory. Use them as follows:
 
-### 1. File Discovery
+| What to save | Where | Example |
+|---|---|---|
+| Atomic fact (fits in one line) | `memory_store` | `user_birthday`: 13 luglio 1980 |
+| Structured document (multi-page) | Vault (`.md` file) | Travel plan, project analysis, meeting notes |
+| Reusable procedure | `skills/` | How to search flights with Firecrawl |
 
-At session start, read `/workspace/ipc/workspace_manifest.json` to see all files in your workspace. This tells you what files exist, their headings, and modification dates. Use it to find relevant context before answering questions about past topics.
+**Do NOT duplicate**: if it fits in one line, it goes in `memory_store` only — NOT also in the vault. Do NOT create vault notes for information that fits in a single line.
 
-The `conversations/` folder contains archived past conversations — searchable with Glob/Grep.
+### File Discovery
 
-### 2. Memory Search (FTS5)
+At session start, read `/workspace/ipc/workspace_manifest.json` to see all files in your workspace. The `conversations/` folder contains archived past conversations — searchable with Glob/Grep.
 
-Use `mcp__nanoclaw__memory_search` to search across stored knowledge AND message history with full-text search. Knowledge results (distilled facts) are returned first, followed by raw messages.
+### Memory Tools
 
-When a user asks about something that might relate to past conversations or stored information, use `memory_search` BEFORE answering from general knowledge.
+| Tool | When |
+|---|---|
+| `memory_search` | Recall past facts or conversations (searches knowledge + messages) |
+| `memory_store` | Save a new fact or update an existing one |
+| `memory_list` | See what you already know (check BEFORE storing) |
+| `memory_delete` | Remove obsolete or incorrect facts |
 
-### 3. Knowledge Store
+When a user asks about something that might relate to past conversations, use `memory_search` BEFORE answering from general knowledge. Use word stems for better Italian recall (e.g. "compra" instead of "comprato").
 
-Use these tools to persist facts, preferences, and important information across sessions:
-
-| Tool            | When                                             |
-| --------------- | ------------------------------------------------ |
-| `memory_search` | Recall past facts or conversations               |
-| `memory_store`  | Save a new fact or update an existing one        |
-| `memory_list`   | See what you already know (check BEFORE storing) |
-| `memory_delete` | Remove obsolete or incorrect facts               |
-
-### Memory Store — Key Conventions
-
-When using `memory_store`, follow these rules strictly:
+### Key Conventions
 
 - Keys in snake_case, always in English
-- Consistent prefixes: `user_`, `trip_`, `project_`, `person_`, `place_`
-- Examples: `user_milk_preference`, `trip_valencia_2026`, `person_mario_rossi`
-- BEFORE creating a new key, use `memory_list` to check if one already exists for the same concept
-- Update existing keys (`memory_store` with the same key) instead of inventing new ones
-- `memory_store` tells you if it did insert or update — if you see "updated", you're using the system well
-- The `value` field must be brief and atomic for simple preferences (e.g. "lactose-free"). Use full sentences only for complex facts. Avoid JSON in value unless structure is truly needed.
-- When using `memory_search`, use word stems for better Italian recall (e.g. "compra" instead of "comprato") or try multiple variations
+- Prefixes: `user_`, `trip_`, `project_`, `person_`, `place_`
+- BEFORE creating a new key, use `memory_list` to check if one already exists
+- Update existing keys instead of inventing new ones
+- Values must be brief and atomic. Full sentences only for complex facts.
 
 ### When to Store
 
-- User explicitly states a preference or fact → store with confidence 1.0
-- You infer something from context → store with confidence 0.6
-- User corrects a previous memory → update existing key
+- User states a preference or fact → confidence 1.0
+- You infer from context → confidence 0.6
+- User corrects a memory → update existing key
 - Do NOT store trivial or one-off information
-
-You can also still create files in `/workspace/group/` for larger documents, notes, and structured data.
-
-## User Profile
-
-You maintain a persistent user profile at `/workspace/group/USER.md`. This file captures preferences, communication patterns, and context learned over time.
-
-### When to Update
-
-- After learning a significant preference (language, tone, schedule, habits)
-- After the user corrects you or expresses a strong opinion
-- After a meaningful interaction that reveals context (job, location, relationships)
-- Do NOT update after every message — only after genuinely new information
-
-### How to Update
-
-1. Read the current `USER.md` first
-2. Use the Edit tool to add or update specific sections
-3. Keep entries atomic and concise (one fact per line)
-4. Use the existing sections: Preferences, Communication Style, Context, Notes
-5. Date-stamp entries that may become stale: `(2026-03)` suffix
-
-### What NOT to Store
-
-- Trivial or one-off requests
-- Information already in `memory_store` (avoid duplication)
-- Sensitive data (passwords, financial details)
-
-The profile complements `memory_store`: USER.md is for patterns and preferences, memory_store is for atomic facts.
 
 ## Procedural Skills (Self-Improving)
 
-You can create reusable skills in `/workspace/group/skills/` to remember how you solved complex tasks. Skills are procedural memory — they help you avoid repeating trial-and-error.
+You can create reusable skills in `/workspace/global/skills/` to remember how you solved complex tasks. Skills are procedural memory — they help you avoid repeating trial-and-error. Skills are shared across all groups.
 
 ### When to Create a Skill
 
 - After successfully completing a multi-step task (3+ steps) that required problem-solving
 - After discovering a non-obvious workflow (tool sequences, API quirks, workarounds)
 - When you think "I might need to do this again"
+- Do NOT create skills for simple tasks, one-off requests, or generic knowledge
 
 ### Skill File Format
 
-Create a markdown file at `/workspace/group/skills/{skill-name}.md`:
+Create a markdown file at `/workspace/global/skills/{skill-name}.md`:
 
 ```markdown
 # Skill: {Descriptive Name}
@@ -137,7 +104,7 @@ Create a markdown file at `/workspace/group/skills/{skill-name}.md`:
 **Version**: 1
 
 ## When to Use
-{Describe the trigger conditions — what kind of request activates this skill}
+{Trigger conditions}
 
 ## Procedure
 1. {Step 1}
@@ -151,21 +118,9 @@ Create a markdown file at `/workspace/group/skills/{skill-name}.md`:
 ### When to Consult Skills
 
 At the start of any non-trivial task, check if a relevant skill exists:
-1. Run `Glob` on `/workspace/group/skills/*.md`
+1. Run `Glob` on `/workspace/global/skills/*.md`
 2. If a skill matches, read it and follow the procedure
 3. If the procedure needs updating after use, update it (increment version, update date)
-
-### When to Update a Skill
-
-- After using a skill, if you found a better approach or a missing step
-- If a tool or API changed and the old procedure no longer works
-- Increment the version number and update the date
-
-### What NOT to Create Skills For
-
-- Simple, one-step tasks (sending a message, reading a file)
-- Tasks the user will never repeat
-- Generic knowledge (use `memory_store` instead)
 
 ## Sharing content via web link
 
@@ -312,83 +267,46 @@ Parameters:
 
 Prefer Firecrawl over agent-browser for simple content extraction. Use agent-browser when you need to interact with the page (click, fill forms, navigate).
 
-## Vault Obsidian — Second Brain
+## Vault Obsidian
 
-You have an Obsidian vault at `/workspace/extra/vault/`. This is the user's personal knowledge base.
+Obsidian vault at `/workspace/extra/vault/`. Use it for **structured documents only** — NOT for atomic facts (those go in `memory_store`).
 
-### REGOLA CRITICA: SCRIVI SEMPRE NEL VAULT
+### When to use the vault
 
-**Ogni volta che produci contenuto strutturato (piani, ricerche, itinerari, decisioni, analisi), DEVI salvarlo come file .md nel vault OLTRE a rispondere in chat.** Non basta rispondere — il contenuto deve persistere nel vault. Fallo SEMPRE, senza che l'utente te lo chieda.
+- Structured content: travel plans, project analyses, meeting notes, decisions with rationale
+- Content that benefits from markdown structure, wikilinks, or YAML frontmatter
+- Anything longer than 2-3 sentences
 
-Workflow obbligatorio:
+### When NOT to use the vault
 
-1. Rispondi all'utente in chat
-2. Crea/aggiorna il file .md nella cartella vault appropriata (usa Write tool)
-3. Salva fatti atomici con `memory_store`
-4. Conferma all'utente: "Salvato in vault: [path]"
+- Atomic facts (name, birthday, preferences) → `memory_store`
+- One-off answers or trivial info → don't save at all
 
-### Cercare nel vault (PRIMA di rispondere)
+### Workflow
 
-Quando l'utente menziona un argomento che potrebbe avere contesto nel vault, CERCA PRIMA con Grep/Glob su `/workspace/extra/vault/`. Poi `memory_search`. Non inventare se hai dati nel vault.
+1. Before creating a note, search if one exists: `Grep`/`Glob` on `/workspace/extra/vault/`
+2. If it exists → update with Edit. If not → create new.
+3. Extract atomic facts to `memory_store` (e.g. dates, names, preferences found during research)
 
-### Dove scrivere
+### Where to write
 
-- Viaggio/pianificazione → `personal/travel/nome-viaggio.md`
-- Progetto attivo → `work/projects/nome-progetto.md` (con action items e status dentro il file, NON nelle shared lists)
-- Decisione presa → `work/decisions/YYYY-MM-DD-titolo.md`
-- Cliente → `work/clients/nome-cliente.md` (con wikilinks ai progetti correlati in `work/projects/`)
-- Riunione → `work/meetings/YYYY-MM-DD-titolo.md`
-- Persona → `people/nome-persona.md`
-- Ricerca/idea → `research/titolo.md`
-- Task e follow-up → `daily/YYYY-MM-DD.md`
-- Brain dump → organizza in note strutturate nella cartella giusta
-- Non sai dove → `inbox/`
+| Content | Path |
+|---|---|
+| Travel/planning | `personal/travel/{name}.md` |
+| Active project | `work/projects/{name}.md` |
+| Decision | `work/decisions/YYYY-MM-DD-{title}.md` |
+| Client | `work/clients/{name}.md` |
+| Meeting | `work/meetings/YYYY-MM-DD-{title}.md` |
+| Person | `people/{name}.md` |
+| Research/idea | `research/{title}.md` |
+| Daily log | `daily/YYYY-MM-DD.md` |
+| Unsure | `inbox/` |
 
-### Modificare note esistenti
+### Format
 
-- Prima di creare una nota, CERCA se ne esiste già una sullo stesso argomento.
-- Se esiste → aggiorna/aggiungi contenuto con Edit, non creare un duplicato.
-- Se non esiste → crea una nuova nota.
-
-### Naming e formato
-
-- Nomi file: `kebab-case.md` (es. `weekend-valencia.md`, `progetto-refactor-api.md`)
-- Ogni nota DEVE avere frontmatter YAML:
-  ```yaml
-  ---
-  title: Titolo descrittivo
-  date: YYYY-MM-DD
-  tags: [tag1, tag2]
-  ---
-  ```
-- Usa wikilinks `[[altra-nota]]` per collegare note correlate
-- Usa tag `#tag` nel testo per categorizzare
-- Usa callout `> [!tip]`, `> [!warning]` per evidenziare
-
-### Struttura cartelle
-
-- `inbox/` — contenuti nuovi da smistare
-- `daily/` — note giornaliere (YYYY-MM-DD.md)
-- `work/projects/` — progetti attivi
-- `work/clients/` — clienti
-- `work/decisions/` — log decisioni con rationale
-- `work/meetings/` — note riunioni
-- `personal/` — goals, health, finance, travel
-- `people/` — persone (lavoro + personali)
-- `research/` — articoli, idee, appunti
-- `archive/` — completati
-
-### Policy
-
-- Vault = fonte di verità. Knowledge store (`memory_store`) = cache veloce.
-- Fatto importante → salva in ENTRAMBI. Conflitto → vault vince.
-- Scrittura libera in tutte le cartelle.
-
-### Vault Skills
-
-- `/daily` — review mattutina con contesto vault
-- `/tldr` — salva sessione nel vault + knowledge store
-- `/file-intel` — analizza documenti, salva insights
+- Filenames: `kebab-case.md`
+- YAML frontmatter: `title`, `date`, `tags`
+- Use `[[wikilinks]]` to connect related notes
 
 ## Project Management Tools
 

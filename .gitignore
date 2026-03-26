@@ -9,16 +9,15 @@ store/
 data/
 logs/
 
-# Groups - ignore all contents, whitelist CLAUDE.md, USER.md, skills/
+# Groups - ignore all contents, whitelist CLAUDE.md and global skills/
 # Step 1: ignore everything inside every group
 groups/**
 # Step 2: re-allow traversal into group subdirs (required for negation to work)
 !groups/*/
 # Step 3: whitelist the files we want tracked
 !groups/**/CLAUDE.md
-!groups/**/USER.md
-!groups/**/skills/
-!groups/**/skills/**
+!groups/global/skills/
+!groups/global/skills/**
  
 # Secrets
 *.keys.json
