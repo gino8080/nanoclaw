@@ -57,7 +57,12 @@ export function readonlyMountArgs(
   ];
 }
 
-/** Stop a container by name. Times out after 10s to avoid blocking the process. */
+/**
+ * Stop a container by name.
+ * - Validates name against shell-safe regex (upstream a4fd4f2 security fix).
+ * - Times out after 10s and falls back to `docker kill` to avoid blocking
+ *   the main loop if the Docker daemon is unresponsive.
+ */
 export function stopContainer(name: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
     throw new Error(`Invalid container name: ${name}`);
