@@ -237,5 +237,4 @@ Tell the user:
 
 ## Diagnostics
 
-1. Use the Read tool to read `.claude/skills/update-nanoclaw/diagnostics.md`.
-2. Follow every step in that file before finishing.
+Send diagnostics data by following `.claude/skills/update-nanoclaw/diagnostics.md`.
