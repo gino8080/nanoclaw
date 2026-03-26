@@ -778,8 +778,7 @@ export async function processTaskIpc(
                 (knowledgeResults as { key: string }[]).map((r) => r.key),
               );
               const extraEntries = allEntries.filter(
-                (e) =>
-                  relevantKeys.includes(e.key) && !existingKeys.has(e.key),
+                (e) => relevantKeys.includes(e.key) && !existingKeys.has(e.key),
               );
               knowledgeResults = [...knowledgeResults, ...extraEntries];
               logger.info(
