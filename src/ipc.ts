@@ -35,7 +35,10 @@ import {
 import { isValidGroupFolder, resolveGroupFolderPath } from './group-folder.js';
 import { processListOperation } from './lists.js';
 import { logger } from './logger.js';
-import { summarizeSearchResults } from './memory-summarizer.js';
+import {
+  extractRelevantKeys,
+  summarizeSearchResults,
+} from './memory-summarizer.js';
 import { validateMount } from './mount-security.js';
 import { AdditionalMount, RegisteredGroup } from './types.js';
 
@@ -760,6 +763,36 @@ export async function processTaskIpc(
           data.category,
           memLimit,
         );
+
+        // LLM fallback for lexical gap: if FTS found few knowledge results,
+        // pass all entries to the LLM to find semantically relevant ones.
+        if (knowledgeResults.length < 3) {
+          const allEntries = listKnowledge(groupFolder);
+          if (allEntries.length > 0) {
+            const relevantKeys = await extractRelevantKeys(
+              data.query,
+              allEntries,
+            );
+            if (relevantKeys.length > 0) {
+              const existingKeys = new Set(
+                (knowledgeResults as { key: string }[]).map((r) => r.key),
+              );
+              const extraEntries = allEntries.filter(
+                (e) =>
+                  relevantKeys.includes(e.key) && !existingKeys.has(e.key),
+              );
+              knowledgeResults = [...knowledgeResults, ...extraEntries];
+              logger.info(
+                {
+                  query: data.query,
+                  ftsCount: knowledgeResults.length - extraEntries.length,
+                  llmExtra: extraEntries.length,
+                },
+                'LLM fallback added knowledge entries',
+              );
+            }
+          }
+        }
       }
       if (scope === 'all' || scope === 'messages') {
         messageResults = searchMessagesFts(
