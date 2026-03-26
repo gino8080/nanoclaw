@@ -10,15 +10,14 @@ import path from 'path';
 import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
-  CONTAINER_MEMORY,
   CONTAINER_TIMEOUT,
   CONTAINER_WATCHDOG_TIMEOUT,
-  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   GIT_TOKENS_DIR,
   GITHUB_TOKEN_PATH,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  ONECLI_URL,
   TIMEZONE,
 } from './config.js';
 import { PUBLIC_BASE_URL } from './config.js';
@@ -26,16 +25,17 @@ import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
-  CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { detectAuthMode } from './credential-proxy.js';
+import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
 import { getCachedToken } from './oauth-keychain.js';
 import { RegisteredGroup } from './types.js';
+
+const onecli = new OneCLI({ url: ONECLI_URL });
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -51,6 +51,7 @@ export interface ContainerInput {
   singleQuery?: boolean;
   assistantName?: string;
   secrets?: Record<string, string>;
+  script?: string;
 }
 
 export interface ContainerOutput {
@@ -86,12 +87,16 @@ function buildVolumeMounts(
       readonly: true,
     });
 
-    // Shadow .env: the project root is mounted read-only, so the .env inside
-    // it is already inaccessible for writes. The credential proxy handles auth.
-    // On Docker you could shadow with /dev/null, but Apple Container only
-    // supports directory mounts — so we skip the shadow mount entirely.
-    // The .env is readable but contains no secrets useful to the container
-    // since auth goes through the credential proxy.
+    // Shadow .env so the agent cannot read secrets from the mounted project root.
+    // Credentials are injected by the OneCLI gateway, never exposed to containers.
+    const envFile = path.join(projectRoot, '.env');
+    if (fs.existsSync(envFile)) {
+      mounts.push({
+        hostPath: '/dev/null',
+        containerPath: '/workspace/project/.env',
+        readonly: true,
+      });
+    }
 
     // Main also gets its group folder as the working directory
     mounts.push({
@@ -217,10 +222,16 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    // Always sync upstream source files into the per-group copy.
-    // Agents can add custom files, but upstream files are overwritten
-    // so new tools and fixes propagate automatically.
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
+    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
+    const needsCopy =
+      !fs.existsSync(groupAgentRunnerDir) ||
+      !fs.existsSync(cachedIndex) ||
+      (fs.existsSync(srcIndex) &&
+        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+    if (needsCopy) {
+      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+    }
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
@@ -243,7 +254,7 @@ function buildVolumeMounts(
 
 /**
  * Read non-Anthropic secrets from .env for passing to the container via stdin.
- * Anthropic auth is handled by the credential proxy — these are for other services.
+ * Anthropic auth is handled by the OneCLI gateway — these are for other services.
  */
 function readSecrets(): Record<string, string> {
   const envSecrets = readEnvFile([
@@ -256,20 +267,12 @@ function readSecrets(): Record<string, string> {
   return envSecrets;
 }
 
-function buildContainerArgs(
+async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
-  isMain: boolean,
-): string[] {
-  const args: string[] = [
-    'run',
-    '-i',
-    '--rm',
-    '--name',
-    containerName,
-    '-m',
-    `${CONTAINER_MEMORY}MB`,
-  ];
+  agentIdentifier?: string,
+): Promise<string[]> {
+  const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
@@ -277,21 +280,19 @@ function buildContainerArgs(
   // Public base URL for generating links to served files
   args.push('-e', `PUBLIC_BASE_URL=${PUBLIC_BASE_URL}`);
 
-  // Route API traffic through the credential proxy (containers never see real secrets)
-  args.push(
-    '-e',
-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-  );
-
-  // Mirror the host's auth method with a placeholder value.
-  // API key mode: SDK sends x-api-key, proxy replaces with real key.
-  // OAuth mode:   SDK exchanges placeholder token for temp API key,
-  //               proxy injects real OAuth token on that exchange request.
-  const authMode = detectAuthMode();
-  if (authMode === 'api-key') {
-    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+  // OneCLI gateway handles credential injection — containers never see real secrets.
+  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
+  const onecliApplied = await onecli.applyContainerConfig(args, {
+    addHostMapping: false, // Nanoclaw already handles host gateway
+    agent: agentIdentifier,
+  });
+  if (onecliApplied) {
+    logger.info({ containerName }, 'OneCLI gateway config applied');
   } else {
-    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    logger.warn(
+      { containerName },
+      'OneCLI gateway not reachable — container will have no credentials',
+    );
   }
 
   // Git tokens for multi-host authentication (push, PR via gh/glab CLI)
@@ -357,14 +358,7 @@ function buildContainerArgs(
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    if (isMain) {
-      // Main containers start as root so the entrypoint can mount --bind
-      // to shadow .env. Privileges are dropped via setpriv in entrypoint.sh.
-      args.push('-e', `RUN_UID=${hostUid}`);
-      args.push('-e', `RUN_GID=${hostGid}`);
-    } else {
-      args.push('--user', `${hostUid}:${hostGid}`);
-    }
+    args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
   }
 
@@ -473,7 +467,15 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName, input.isMain);
+  // Main group uses the default OneCLI agent; others use their own agent.
+  const agentIdentifier = input.isMain
+    ? undefined
+    : group.folder.toLowerCase().replace(/_/g, '-');
+  const containerArgs = await buildContainerArgs(
+    mounts,
+    containerName,
+    agentIdentifier,
+  );
 
   logger.debug(
     {
@@ -715,10 +717,20 @@ export async function runContainerAgent(
       const isError = code !== 0;
 
       if (isVerbose || isError) {
+        // On error, log input metadata only — not the full prompt.
+        // Full input is only included at verbose level to avoid
+        // persisting user conversation content on every non-zero exit.
+        if (isVerbose) {
+          logLines.push(`=== Input ===`, JSON.stringify(input, null, 2), ``);
+        } else {
+          logLines.push(
+            `=== Input Summary ===`,
+            `Prompt length: ${input.prompt.length} chars`,
+            `Session ID: ${input.sessionId || 'new'}`,
+            ``,
+          );
+        }
         logLines.push(
-          `=== Input ===`,
-          JSON.stringify(input, null, 2),
-          ``,
           `=== Container Args ===`,
           containerArgs.join(' '),
           ``,
@@ -862,6 +874,7 @@ export function writeTasksSnapshot(
     id: string;
     groupFolder: string;
     prompt: string;
+    script?: string | null;
     schedule_type: string;
     schedule_value: string;
     status: string;
@@ -897,7 +910,7 @@ export function writeGroupsSnapshot(
   groupFolder: string,
   isMain: boolean,
   groups: AvailableGroup[],
-  registeredJids: Set<string>,
+  _registeredJids: Set<string>,
 ): void {
   const groupIpcDir = resolveGroupIpcPath(groupFolder);
   fs.mkdirSync(groupIpcDir, { recursive: true });
