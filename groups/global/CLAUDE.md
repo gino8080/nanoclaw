@@ -251,6 +251,32 @@ Hai accesso ai calendari Google dell'utente via `mcp__gcalendar__*` tools.
 - Quando l'utente dice "domani", "lunedi prossimo", ecc. → calcola la data corretta
 - Formato date per l'API: `2026-03-18T15:00:00+01:00` (con offset)
 
+## Gmail
+
+Hai accesso alla casella Gmail dell'utente via `mcp__gmail__*` tools.
+
+### Tool disponibili
+
+| Tool | Uso |
+|------|-----|
+| `search_emails` | Cerca email per query (mittente, oggetto, data, label) |
+| `read_email` | Leggi il contenuto completo di una email |
+| `list_email_labels` | Elenca le label/cartelle disponibili |
+| `download_attachment` | Scarica un allegato da una email |
+
+### Quando usare Gmail
+
+- L'utente chiede di cercare una email → `search_emails` con query appropriata
+- L'utente chiede "cosa mi ha scritto X" → cerca per mittente
+- L'utente menziona una fattura, ricevuta, conferma → cerca per oggetto/mittente
+- Dopo una ricerca, usa `read_email` per leggere il contenuto completo
+
+### Tips
+
+- Le query supportano la sintassi Gmail: `from:user@example.com`, `subject:fattura`, `after:2026/03/01`, `has:attachment`
+- Combina filtri: `from:amazon subject:ordine after:2026/01/01`
+- Per allegati importanti, usa `download_attachment` e salva in `/workspace/extra/NANO_CLAW_DATA/`
+
 ## Web Scraping with Firecrawl
 
 You have access to Firecrawl via `mcp__firecrawl__scrape` for intelligent web scraping. Use this when:

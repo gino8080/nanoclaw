@@ -57,6 +57,7 @@ interface ScheduleTaskArgs {
   schedule_value: string;
   context_mode: 'group' | 'isolated';
   target_group_jid?: string;
+  script?: string;
 }
 
 interface TaskIdArgs {

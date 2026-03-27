@@ -3,7 +3,7 @@
 # Usage:
 #   ./scripts/logs.sh          # Follow all logs live
 #   ./scripts/logs.sh status   # Quick status snapshot
-#   ./scripts/logs.sh host     # Only host logs
+#   ./scripts/logs.sh host     # Only host logs (stdout + stderr)
 #   ./scripts/logs.sh agents   # Only container agent logs
 #   ./scripts/logs.sh pool     # Only swarm pool bot activity
 #   ./scripts/logs.sh errors   # Only errors/warnings
@@ -21,10 +21,19 @@ MAGENTA='\033[35m'
 CYAN='\033[36m'
 RESET='\033[0m'
 
+HOST_LOG="logs/nanoclaw.log"
+ERROR_LOG="logs/nanoclaw.error.log"
+
 header() {
   echo ""
   echo -e "${BOLD}${BLUE}═══ $1 ═══${RESET}"
   echo ""
+}
+
+# Collect recent container log files (most recent first)
+find_agent_logs() {
+  local limit="${1:-10}"
+  find groups/*/logs -name 'container-*.log' 2>/dev/null | sort -r | head -"$limit"
 }
 
 MODE="${1:-live}"
@@ -62,26 +71,25 @@ case "$MODE" in
       db.close();
     " 2>/dev/null || echo "  (DB not available)"
 
-    header "RECENT ACTIVITY (last 10 lines)"
-    tail -10 logs/nanoclaw.log 2>/dev/null | sed 's/^/  /' || echo "  (no logs)"
+    header "RECENT ACTIVITY (last 10 lines — stdout)"
+    tail -10 "$HOST_LOG" 2>/dev/null | sed 's/^/  /' || echo "  (no logs)"
+
+    header "RECENT ERRORS (last 10 lines — stderr)"
+    tail -10 "$ERROR_LOG" 2>/dev/null | sed 's/^/  /' || echo "  (no error logs)"
 
     header "POOL BOT ACTIVITY"
-    grep -i "pool" logs/nanoclaw.log 2>/dev/null | tail -5 | sed 's/^/  /' || echo "  (no pool activity)"
+    grep -i "pool" "$HOST_LOG" 2>/dev/null | tail -5 | sed 's/^/  /' || echo "  (no pool activity)"
     echo ""
     ;;
 
   host)
-    header "HOST LOGS (live)"
-    tail -f logs/nanoclaw.log
+    header "HOST LOGS (live — stdout + stderr)"
+    tail -f "$HOST_LOG" "$ERROR_LOG"
     ;;
 
   agents)
     header "AGENT CONTAINER LOGS (live)"
-    # Find all container log files across groups and follow them
-    LOG_FILES=$(find groups/*/logs -name 'container-*.log' -newer logs/nanoclaw.log 2>/dev/null | head -10)
-    if [ -z "$LOG_FILES" ]; then
-      LOG_FILES=$(find groups/*/logs -name 'container-*.log' 2>/dev/null | sort -r | head -5)
-    fi
+    LOG_FILES=$(find_agent_logs 5)
     if [ -z "$LOG_FILES" ]; then
       echo "No container logs found. Falling back to docker logs..."
       CONTAINER=$(docker ps --filter "name=nanoclaw" --format "{{.Names}}" 2>/dev/null | head -1)
@@ -99,24 +107,25 @@ case "$MODE" in
 
   pool)
     header "SWARM POOL BOT ACTIVITY (live)"
-    tail -f logs/nanoclaw.log | grep --line-buffered -iE "pool|swarm|sender|renamed"
+    tail -f "$HOST_LOG" "$ERROR_LOG" | grep --line-buffered -iE "pool|swarm|sender|renamed"
     ;;
 
   errors)
-    header "ERRORS & WARNINGS (live)"
-    tail -f logs/nanoclaw.log | grep --line-buffered -iE "ERROR|WARN|FATAL|fail|crash"
+    header "ERRORS & WARNINGS (live — stdout + stderr)"
+    tail -f "$HOST_LOG" "$ERROR_LOG" | grep --line-buffered -iE "ERROR|WARN|FATAL|fail|crash"
     ;;
 
   live|*)
     header "ALL LOGS (live) — Ctrl+C to stop"
-    echo -e "  ${CYAN}[host]${RESET}    = NanoClaw host process"
+    echo -e "  ${CYAN}[host]${RESET}    = NanoClaw host process (stdout)"
+    echo -e "  ${RED}[stderr]${RESET}  = NanoClaw host process (stderr/pino)"
     echo -e "  ${MAGENTA}[agent]${RESET}   = Container agent output"
     echo -e "  ${YELLOW}[pool]${RESET}    = Swarm pool bot messages"
     echo ""
 
     # Collect all log files to follow
-    ALL_LOGS="logs/nanoclaw.log"
-    AGENT_LOGS=$(find groups/*/logs -name 'container-*.log' 2>/dev/null | sort -r | head -10)
+    ALL_LOGS="$HOST_LOG $ERROR_LOG"
+    AGENT_LOGS=$(find_agent_logs 10)
     if [ -n "$AGENT_LOGS" ]; then
       ALL_LOGS="$ALL_LOGS $AGENT_LOGS"
     fi
@@ -128,6 +137,8 @@ case "$MODE" in
         echo -e "${RED}[error]${RESET} $line"
       elif echo "$line" | grep -qi "WARN"; then
         echo -e "${YELLOW}[warn]${RESET}  $line"
+      elif echo "$line" | grep -qi "==>.*error\.log"; then
+        echo -e "${RED}[stderr]${RESET} $line"
       elif echo "$line" | grep -qi "==>.*container"; then
         echo -e "${MAGENTA}[agent]${RESET} $line"
       elif echo "$line" | grep -qi "Agent output\|Spawning container\|container agent"; then

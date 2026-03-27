@@ -35,7 +35,7 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Install agent-browser, claude-code, and Gmail MCP server globally
-RUN npm install -g agent-browser @anthropic-ai/claude-code @gongrzhe/server-gmail-autoauth-mcp
+RUN npm install -g agent-browser @anthropic-ai/claude-code@2.1.84 @gongrzhe/server-gmail-autoauth-mcp
 
 # Create app directory
 WORKDIR /app

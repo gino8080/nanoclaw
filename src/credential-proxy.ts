@@ -16,6 +16,7 @@ import { request as httpRequest, RequestOptions } from 'http';
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+import { getCachedToken } from './oauth-keychain.js';
 
 export type AuthMode = 'api-key' | 'oauth';
 
@@ -67,15 +68,19 @@ export function startCredentialProxy(
           delete headers['x-api-key'];
           headers['x-api-key'] = secrets.ANTHROPIC_API_KEY;
         } else {
-          // OAuth mode: replace placeholder Bearer token with the real one
-          // only when the container actually sends an Authorization header
-          // (exchange request + auth probes). Post-exchange requests use
-          // x-api-key only, so they pass through without token injection.
+          // OAuth mode: containers send ANTHROPIC_API_KEY=placeholder so
+          // Claude Code uses API-key mode internally (no local OAuth
+          // validation). The proxy converts to OAuth on the wire.
+          const token =
+            getCachedToken() || oauthToken;
+          if (headers['x-api-key']) {
+            delete headers['x-api-key'];
+          }
           if (headers['authorization']) {
             delete headers['authorization'];
-            if (oauthToken) {
-              headers['authorization'] = `Bearer ${oauthToken}`;
-            }
+          }
+          if (token) {
+            headers['authorization'] = `Bearer ${token}`;
           }
         }
 

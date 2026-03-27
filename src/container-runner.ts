@@ -222,13 +222,22 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
+    // Check if ANY source file is newer than the cached copy (not just index.ts)
     const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
-    const needsCopy =
-      !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+    let needsCopy =
+      !fs.existsSync(groupAgentRunnerDir) || !fs.existsSync(cachedIndex);
+    if (!needsCopy) {
+      const cachedMtime = fs.statSync(cachedIndex).mtimeMs;
+      for (const file of fs.readdirSync(agentRunnerSrc)) {
+        const srcMtime = fs.statSync(
+          path.join(agentRunnerSrc, file),
+        ).mtimeMs;
+        if (srcMtime > cachedMtime) {
+          needsCopy = true;
+          break;
+        }
+      }
+    }
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
@@ -352,6 +361,7 @@ async function buildContainerArgs(
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 
+
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),
   // or when getuid is unavailable (native Windows without WSL).
@@ -467,15 +477,8 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  // Main group uses the default OneCLI agent; others use their own agent.
-  const agentIdentifier = input.isMain
-    ? undefined
-    : group.folder.toLowerCase().replace(/_/g, '-');
-  const containerArgs = await buildContainerArgs(
-    mounts,
-    containerName,
-    agentIdentifier,
-  );
+  // Single user — all groups use the default OneCLI agent.
+  const containerArgs = await buildContainerArgs(mounts, containerName);
 
   logger.debug(
     {

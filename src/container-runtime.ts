@@ -9,11 +9,11 @@ import os from 'os';
 import { logger } from './logger.js';
 
 /** The container runtime binary name. */
-export const CONTAINER_RUNTIME_BIN = 'container';
+export const CONTAINER_RUNTIME_BIN = 'docker';
 
 /**
  * Address the credential proxy binds to.
- * Apple Container (macOS): 127.0.0.1 — the VM routes host.docker.internal to loopback.
+ * Docker Desktop (macOS): bind to 0.0.0.0 so containers can reach the proxy.
  * Docker (Linux): bind to the docker0 bridge IP so only containers can reach it,
  *   falling back to 0.0.0.0 if the interface isn't found.
  */
@@ -21,7 +21,8 @@ export const PROXY_BIND_HOST =
   process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
 
 function detectProxyBindHost(): string {
-  if (os.platform() === 'darwin') return '127.0.0.1';
+  // Docker Desktop (macOS): bind to 0.0.0.0 so containers can reach the proxy.
+  if (os.platform() === 'darwin') return '0.0.0.0';
 
   // WSL uses Docker Desktop (same VM routing as macOS) — loopback is correct.
   if (fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop')) return '127.0.0.1';
@@ -61,75 +62,50 @@ export function stopContainer(name: string): string {
   return `${CONTAINER_RUNTIME_BIN} stop -t 1 ${name}`;
 }
 
-/** Ensure the container runtime is running, starting it if needed. */
+/** Ensure the container runtime is running. */
 export function ensureContainerRuntimeRunning(): void {
   try {
-    execSync(`${CONTAINER_RUNTIME_BIN} system status`, { stdio: 'pipe' });
+    execSync(`${CONTAINER_RUNTIME_BIN} info`, { stdio: 'pipe' });
     logger.debug('Container runtime already running');
-  } catch {
-    logger.info('Starting container runtime...');
-    try {
-      execSync(`${CONTAINER_RUNTIME_BIN} system start`, {
-        stdio: 'pipe',
-        timeout: 30000,
-      });
-      logger.info('Container runtime started');
-    } catch (err) {
-      logger.error({ err }, 'Failed to start container runtime');
-      console.error(
-        '\n╔════════════════════════════════════════════════════════════════╗',
-      );
-      console.error(
-        '║  FATAL: Container runtime failed to start                      ║',
-      );
-      console.error(
-        '║                                                                ║',
-      );
-      console.error(
-        '║  Agents cannot run without a container runtime. To fix:        ║',
-      );
-      console.error(
-        '║  1. Ensure Apple Container is installed                        ║',
-      );
-      console.error(
-        '║  2. Run: container system start                                ║',
-      );
-      console.error(
-        '║  3. Restart NanoClaw                                           ║',
-      );
-      console.error(
-        '╚════════════════════════════════════════════════════════════════╝\n',
-      );
-      throw new Error('Container runtime is required but failed to start');
-    }
+  } catch (err) {
+    logger.error({ err }, 'Container runtime not available');
+    console.error(
+      '\n╔════════════════════════════════════════════════════════════════╗',
+    );
+    console.error(
+      '║  FATAL: Container runtime not available                        ║',
+    );
+    console.error(
+      '║  Ensure Docker Desktop is running, then restart NanoClaw.      ║',
+    );
+    console.error(
+      '╚════════════════════════════════════════════════════════════════╝\n',
+    );
+    throw new Error('Container runtime is required but failed to start');
   }
 }
 
 /** Kill orphaned NanoClaw containers from previous runs. */
 export function cleanupOrphans(): void {
   try {
-    const output = execSync(`${CONTAINER_RUNTIME_BIN} ls --format json`, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-    });
-    const containers: { status: string; configuration: { id: string } }[] =
-      JSON.parse(output || '[]');
-    const orphans = containers
-      .filter(
-        (c) =>
-          c.status === 'running' && c.configuration.id.startsWith('nanoclaw-'),
-      )
-      .map((c) => c.configuration.id);
-    for (const name of orphans) {
+    const output = execSync(
+      `${CONTAINER_RUNTIME_BIN} ps --filter "name=nanoclaw-" --format "{{.Names}}"`,
+      { stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' },
+    );
+    const running = output
+      .trim()
+      .split('\n')
+      .filter((n) => n.startsWith('nanoclaw-'));
+    for (const name of running) {
       try {
         execSync(stopContainer(name), { stdio: 'pipe' });
       } catch {
         /* already stopped */
       }
     }
-    if (orphans.length > 0) {
+    if (running.length > 0) {
       logger.info(
-        { count: orphans.length, names: orphans },
+        { count: running.length, names: running },
         'Stopped orphaned containers',
       );
     }
