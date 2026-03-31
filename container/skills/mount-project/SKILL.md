@@ -6,6 +6,8 @@ allowed-tools: Bash(git:*), Bash(ls:*), Bash(gh:*)
 
 # /mount-project
 
+**Discord only.** If invoked from Telegram, respond: "La gestione dei progetti e del codice sorgente avviene su Discord. Su Telegram puoi salvare informazioni sui progetti nel vault (`/workspace/extra/vault/work/projects/`)."
+
 Interactive workflow to mount a development project into the container.
 
 ## Steps

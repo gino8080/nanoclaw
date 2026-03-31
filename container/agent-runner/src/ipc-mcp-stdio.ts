@@ -1503,6 +1503,10 @@ async function pollProjectResponse(
   return null;
 }
 
+// Project management tools — only available on non-Telegram channels.
+// Telegram uses pre-mounted vault; Discord uses per-project channels.
+if (!groupFolder.startsWith('telegram_')) {
+
 server.tool(
   'list_available_projects',
   `List projects available to mount from the host filesystem.
@@ -1823,6 +1827,11 @@ The session runs independently until the user or a timeout closes it.`,
   },
 );
 
+} // end non-Telegram project management tools
+
+// Discord-specific project registration — only on Discord channels
+if (groupFolder.startsWith('discord_')) {
+
 server.tool(
   'register_discord_project',
   `Register a project from ~/PROJECTS as a dedicated Discord channel.
@@ -1990,6 +1999,8 @@ Only available from the main group.`,
     };
   },
 );
+
+} // end Discord-specific project tools
 
 // Start the stdio transport
 const transport = new StdioServerTransport();

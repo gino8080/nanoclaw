@@ -229,9 +229,7 @@ function buildVolumeMounts(
     if (!needsCopy) {
       const cachedMtime = fs.statSync(cachedIndex).mtimeMs;
       for (const file of fs.readdirSync(agentRunnerSrc)) {
-        const srcMtime = fs.statSync(
-          path.join(agentRunnerSrc, file),
-        ).mtimeMs;
+        const srcMtime = fs.statSync(path.join(agentRunnerSrc, file)).mtimeMs;
         if (srcMtime > cachedMtime) {
           needsCopy = true;
           break;
@@ -360,7 +358,6 @@ async function buildContainerArgs(
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
-
 
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),

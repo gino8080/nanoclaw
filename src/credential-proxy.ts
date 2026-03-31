@@ -71,8 +71,7 @@ export function startCredentialProxy(
           // OAuth mode: containers send ANTHROPIC_API_KEY=placeholder so
           // Claude Code uses API-key mode internally (no local OAuth
           // validation). The proxy converts to OAuth on the wire.
-          const token =
-            getCachedToken() || oauthToken;
+          const token = getCachedToken() || oauthToken;
           if (headers['x-api-key']) {
             delete headers['x-api-key'];
           }

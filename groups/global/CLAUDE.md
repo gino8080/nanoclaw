@@ -51,6 +51,14 @@ You have 3 levels of memory. Use them as follows:
 
 **Do NOT duplicate**: if it fits in one line, it goes in `memory_store` only — NOT also in the vault. Do NOT create vault notes for information that fits in a single line.
 
+### Clienti e progetti: vault + knowledge_store
+
+Per clienti e progetti esistono **entrambi** i livelli:
+- **Vault** (`work/clients/`, `work/projects/`): scheda completa e dettagliata — è la **fonte di verità**. Storico, task, note, contatti, decisioni.
+- **knowledge_store** (`work_client_*`): riassunto atomico (1-2 righe) per recall veloce.
+
+**Regola di sincronizzazione**: quando aggiorni una scheda nel vault, aggiorna anche la entry corrispondente nel knowledge_store con un riassunto aggiornato. Se le due fonti sono in conflitto, il vault vince.
+
 ### File Discovery
 
 At session start, read `/workspace/ipc/workspace_manifest.json` to see all files in your workspace. The `conversations/` folder contains archived past conversations — searchable with Glob/Grep.
@@ -297,6 +305,8 @@ Prefer Firecrawl over agent-browser for simple content extraction. Use agent-bro
 
 Obsidian vault at `/workspace/extra/vault/`. Use it for **structured documents only** — NOT for atomic facts (those go in `memory_store`).
 
+**IMPORTANTE**: Su Telegram il vault e' SEMPRE pre-montato a `/workspace/extra/vault/`. Accedi direttamente ai file — NON usare `mount_project` o altri tool di project management (non sono disponibili su Telegram).
+
 ### When to use the vault
 
 - Structured content: travel plans, project analyses, meeting notes, decisions with rationale
@@ -334,9 +344,40 @@ Obsidian vault at `/workspace/extra/vault/`. Use it for **structured documents o
 - YAML frontmatter: `title`, `date`, `tags`
 - Use `[[wikilinks]]` to connect related notes
 
-## Project Management Tools
+### Frontmatter per Dataview (OBBLIGATORIO)
 
-You have tools to manage development projects from the host:
+Il vault usa Dataview per dashboard automatiche. Rispetta questi frontmatter:
+
+**Progetti** (`work/projects/`):
+```yaml
+---
+title: Cliente — Nome Progetto
+date: YYYY-MM-DD
+tags: [project, cliente-tag, progetto-tag]
+status: in-corso | in-attesa | completato
+client: "[[work/clients/nome-cliente|NomeCliente]]"
+priority: high | medium | low
+---
+```
+
+**Clienti** (`work/clients/`):
+```yaml
+---
+title: Nome Cliente
+date: YYYY-MM-DD
+tags: [client, nome-tag, tipo]
+type: client
+collaboration: fisso | attivo | spot
+---
+```
+
+**Dashboard e Kanban**:
+- `work/dashboard.md` — dashboard Dataview automatica (NON modificare le query)
+- `work/kanban.md` — board Kanban con task operativi. Quando aggiungi/completi un task in una scheda progetto, aggiorna anche il kanban spostando il task nella colonna corretta.
+
+## Project Management Tools (Discord only)
+
+These tools are available **only on Discord channels** — they are NOT available on Telegram.
 
 | Tool                      | Use for                                                      |
 | ------------------------- | ------------------------------------------------------------ |
@@ -346,6 +387,8 @@ You have tools to manage development projects from the host:
 | `spawn_claude_session`    | Start a Claude Code session on the host for complex tasks    |
 
 Use `/mount-project` for the interactive workflow. Projects mount at `/workspace/extra/{name}`.
+
+**Su Telegram**: il vault Obsidian e' pre-montato a `/workspace/extra/vault/` — usalo direttamente per salvare note strutturate su clienti, progetti, meeting, ecc. Le informazioni sui progetti (schede cliente, status, task) vanno nel vault. L'operativita' sul codice sorgente si fa su Discord.
 
 ## Message Formatting
 
