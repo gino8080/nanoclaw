@@ -276,7 +276,6 @@ function migrateFts(database: Database.Database): void {
       "INSERT INTO _migrations (key, done_at) VALUES ('fts_rebuild_v1', ?)",
     )
     .run(new Date().toISOString());
-
 }
 
 export function initDatabase(): void {
