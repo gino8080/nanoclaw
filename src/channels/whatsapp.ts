@@ -20,6 +20,17 @@ import {
 import { getLastGroupSync, setLastGroupSync, updateChatName } from '../db.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
+
+// Baileys expects a pino-compatible logger with level, child, trace.
+// Wrap our built-in logger to satisfy the ILogger interface.
+const baileysLogger = {
+  ...logger,
+  level: 'warn' as string,
+  trace: (dataOrMsg: Record<string, unknown> | string, msg?: string) =>
+    logger.debug(dataOrMsg as Record<string, unknown>, msg),
+  child: () => baileysLogger,
+};
+
 import {
   Channel,
   OnInboundMessage,
@@ -83,10 +94,10 @@ export class WhatsAppChannel implements Channel {
       version,
       auth: {
         creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, logger),
+        keys: makeCacheableSignalKeyStore(state.keys, baileysLogger),
       },
       printQRInTerminal: false,
-      logger,
+      logger: baileysLogger,
       browser: Browsers.macOS('Chrome'),
       // Accept history sync so we receive recent messages on connect.
       shouldSyncHistoryMessage: () => this.readOnly,

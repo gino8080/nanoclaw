@@ -1,4 +1,4 @@
-import { ChildProcess, execSync } from 'child_process';
+import { ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -204,10 +204,7 @@ export class GroupQueue {
 
     if (state.containerName) {
       try {
-        execSync(stopContainer(state.containerName), {
-          stdio: 'pipe',
-          timeout: 10000,
-        });
+        stopContainer(state.containerName);
       } catch {
         // Container may have already exited
       }
