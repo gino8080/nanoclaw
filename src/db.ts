@@ -224,6 +224,17 @@ function createSchema(database: Database.Database): void {
 
   // Backfill FTS index from existing messages (one-time migration)
   migrateFts(database);
+
+  // Add reply context columns if they don't exist (migration for existing DBs)
+  try {
+    database.exec(`ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT`);
+    database.exec(
+      `ALTER TABLE messages ADD COLUMN reply_to_message_content TEXT`,
+    );
+    database.exec(`ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`);
+  } catch {
+    /* columns already exist */
+  }
 }
 
 function migrateFts(database: Database.Database): void {
@@ -266,16 +277,6 @@ function migrateFts(database: Database.Database): void {
     )
     .run(new Date().toISOString());
 
-  // Add reply context columns if they don't exist (migration for existing DBs)
-  try {
-    database.exec(`ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT`);
-    database.exec(
-      `ALTER TABLE messages ADD COLUMN reply_to_message_content TEXT`,
-    );
-    database.exec(`ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`);
-  } catch {
-    /* columns already exist */
-  }
 }
 
 export function initDatabase(): void {
