@@ -69,6 +69,7 @@ interface RegisterGroupArgs {
   name: string;
   folder: string;
   trigger: string;
+  requiresTrigger?: boolean;
 }
 
 interface ManageListArgs {
