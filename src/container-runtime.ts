@@ -57,12 +57,38 @@ export function readonlyMountArgs(
   ];
 }
 
-/** Stop a container by name. Uses execFileSync to avoid shell injection. */
+/** Stop a container by name. Times out after 10s to avoid blocking the process. */
 export function stopContainer(name: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
     throw new Error(`Invalid container name: ${name}`);
   }
-  execSync(`${CONTAINER_RUNTIME_BIN} stop -t 1 ${name}`, { stdio: 'pipe' });
+  try {
+    execSync(`${CONTAINER_RUNTIME_BIN} stop -t 1 ${name}`, {
+      stdio: 'pipe',
+      timeout: 10_000,
+    });
+  } catch (err: unknown) {
+    const isTimeout =
+      err instanceof Error &&
+      'killed' in err &&
+      (err as Record<string, unknown>).killed;
+    if (isTimeout) {
+      logger.warn(
+        { containerName: name },
+        'docker stop timed out (10s), forcing kill',
+      );
+      try {
+        execSync(`${CONTAINER_RUNTIME_BIN} kill ${name}`, {
+          stdio: 'pipe',
+          timeout: 5_000,
+        });
+      } catch {
+        logger.warn({ containerName: name }, 'docker kill also failed');
+      }
+    } else {
+      throw err;
+    }
+  }
 }
 
 /** Ensure the container runtime is running. */
