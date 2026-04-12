@@ -297,7 +297,7 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   agentIdentifier?: string,
-): Promise<string[]> {
+): Promise<{ args: string[]; onecliApplied: boolean }> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
@@ -398,7 +398,7 @@ async function buildContainerArgs(
 
   args.push(CONTAINER_IMAGE);
 
-  return args;
+  return { args, onecliApplied };
 }
 
 function writeWorkspaceManifest(groupFolder: string): void {
@@ -494,7 +494,24 @@ export async function runContainerAgent(
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   // Single user — all groups use the default OneCLI agent.
-  const containerArgs = await buildContainerArgs(mounts, containerName);
+  const { args: containerArgs, onecliApplied } = await buildContainerArgs(
+    mounts,
+    containerName,
+  );
+
+  // Scheduled tasks need credentials to do anything useful.
+  // Abort early instead of wasting 10min waiting for watchdog to kill it.
+  if (input.isScheduledTask && !onecliApplied) {
+    logger.error(
+      { group: group.name, containerName },
+      'Aborting scheduled task — OneCLI gateway not reachable',
+    );
+    return {
+      status: 'error',
+      result: null,
+      error: 'OneCLI gateway not reachable — scheduled task aborted',
+    };
+  }
 
   logger.debug(
     {
